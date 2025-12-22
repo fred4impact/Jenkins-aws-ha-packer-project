@@ -1,0 +1,16 @@
+---
+# Ansible Collections and Roles Requirements
+
+collections:
+  - name: community.general
+    version: ">=5.0.0"
+  - name: ansible.posix
+    version: ">=1.4.0"
+
+roles:
+  # Add external roles here if needed
+  # - name: geerlingguy.java
+  #   version: ">=4.0.0"
+
+
+

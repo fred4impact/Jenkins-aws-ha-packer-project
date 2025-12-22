@@ -1,0 +1,17 @@
+# Ansible
+*.retry
+.vault_pass
+hosts.local
+*.log
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Ansible fact cache
+/tmp/ansible_facts/
+
+
+

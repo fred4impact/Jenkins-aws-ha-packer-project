@@ -1,0 +1,59 @@
+---
+# Apply OS updates and security patches
+
+- name: Update all packages (RedHat)
+  yum:
+    name: "*"
+    state: latest
+    update_cache: yes
+    security: yes
+  when: ansible_os_family == 'RedHat'
+  tags:
+    - os-updates
+    - security
+
+- name: Update all packages (Debian)
+  apt:
+    upgrade: dist
+    update_cache: yes
+    autoremove: yes
+    autoclean: yes
+  when: ansible_os_family == 'Debian'
+  tags:
+    - os-updates
+    - security
+
+- name: Install security updates only (RedHat)
+  yum:
+    name: "*"
+    state: latest
+    security: yes
+    update_cache: yes
+  when: ansible_os_family == 'RedHat' and security_updates_only | default(false)
+  tags:
+    - os-updates
+    - security
+
+- name: Install unattended-upgrades (Debian)
+  apt:
+    name: unattended-upgrades
+    state: present
+    update_cache: yes
+  when: ansible_os_family == 'Debian'
+  tags:
+    - os-updates
+    - security
+
+- name: Configure automatic security updates (Debian)
+  template:
+    src: 50unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    mode: '0644'
+  when: ansible_os_family == 'Debian'
+  notify: restart unattended-upgrades
+  tags:
+    - os-updates
+    - security
+
+
+

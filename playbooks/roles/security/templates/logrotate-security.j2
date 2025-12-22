@@ -1,0 +1,20 @@
+/var/log/secure
+/var/log/auth.log
+/var/log/fail2ban.log
+/var/log/jenkins/jenkins.log
+{
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+    sharedscripts
+    postrotate
+        /bin/kill -HUP `cat /var/run/syslogd.pid 2> /dev/null` 2> /dev/null || true
+    endscript
+}
+
+
+

@@ -1,0 +1,41 @@
+---
+# Security Role - Main Tasks
+# Applies security hardening and OS updates
+
+- name: Include OS-specific security tasks
+  include_tasks: "{{ ansible_os_family }}.yml"
+  when: ansible_os_family in ['RedHat', 'Debian']
+  ignore_errors: yes
+
+- name: Apply security updates
+  include_tasks: os-updates.yml
+  tags:
+    - security
+    - os-updates
+
+- name: Configure firewall
+  include_tasks: firewall.yml
+  tags:
+    - security
+    - firewall
+
+- name: Configure SSH security
+  include_tasks: ssh-hardening.yml
+  tags:
+    - security
+    - ssh
+
+- name: Configure system security
+  include_tasks: system-security.yml
+  tags:
+    - security
+    - system
+
+- name: Install security tools
+  include_tasks: security-tools.yml
+  tags:
+    - security
+    - tools
+
+
+

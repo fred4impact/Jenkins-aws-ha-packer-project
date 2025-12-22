@@ -1,0 +1,10 @@
+#!/bin/bash
+# Jenkins CLI Wrapper Script
+
+JENKINS_URL="{{ jenkins_url | default('http://localhost:8080') }}"
+JENKINS_CLI_JAR="/usr/local/bin/jenkins-cli.jar"
+
+java -jar "${JENKINS_CLI_JAR}" -s "${JENKINS_URL}" "$@"
+
+
+

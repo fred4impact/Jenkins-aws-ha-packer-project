@@ -1,0 +1,56 @@
+---
+# System-level security configuration
+
+- name: Configure password policies
+  template:
+    src: login.defs.j2
+    dest: /etc/login.defs
+    mode: '0644'
+  tags:
+    - system
+    - security
+
+- name: Configure PAM password quality
+  template:
+    src: system-auth.j2
+    dest: /etc/pam.d/system-auth
+    mode: '0644'
+  when: ansible_os_family == 'RedHat'
+  tags:
+    - system
+    - security
+
+- name: Set kernel security parameters
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: yes
+    reload: yes
+  loop: "{{ kernel_security_params }}"
+  tags:
+    - system
+    - security
+
+- name: Disable unnecessary services
+  systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: no
+  loop: "{{ disabled_services }}"
+  when: disabled_services is defined
+  tags:
+    - system
+    - security
+
+- name: Configure log rotation
+  template:
+    src: logrotate-security.j2
+    dest: /etc/logrotate.d/security
+    mode: '0644'
+  tags:
+    - system
+    - security
+
+
+

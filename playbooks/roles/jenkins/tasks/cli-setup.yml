@@ -1,0 +1,19 @@
+---
+# Setup Jenkins CLI
+
+- name: Download Jenkins CLI JAR
+  get_url:
+    url: "http://localhost:{{ jenkins_port }}/jnlpJars/jenkins-cli.jar"
+    dest: "/usr/local/bin/jenkins-cli.jar"
+    mode: '0644'
+  when: jenkins_cli_enabled | default(true)
+  ignore_errors: yes
+
+- name: Create Jenkins CLI wrapper script
+  template:
+    src: jenkins-cli.sh.j2
+    dest: /usr/local/bin/jenkins-cli
+    mode: '0755'
+  when: jenkins_cli_enabled | default(true)
+
+

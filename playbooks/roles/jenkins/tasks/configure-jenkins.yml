@@ -1,0 +1,56 @@
+---
+# Configure Jenkins system settings
+
+- name: Wait for Jenkins to be ready
+  uri:
+    url: "http://localhost:{{ jenkins_port }}/login"
+    status_code: [200, 403]
+    method: GET
+  register: jenkins_status
+  until: jenkins_status.status == 200 or jenkins_status.status == 403
+  retries: 30
+  delay: 10
+  ignore_errors: yes
+
+- name: Get Jenkins initial admin password
+  slurp:
+    src: "{{ jenkins_home }}/secrets/initialAdminPassword"
+  register: jenkins_password
+  when: jenkins_password is not defined or jenkins_password.content == ""
+
+- name: Configure Jenkins system properties
+  template:
+    src: jenkins-config.xml.j2
+    dest: "{{ jenkins_home }}/config.xml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: restart jenkins
+
+- name: Configure Jenkins location
+  template:
+    src: jenkins-location.xml.j2
+    dest: "{{ jenkins_home }}/jenkins.model.JenkinsLocationConfiguration.xml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: restart jenkins
+
+- name: Configure Jenkins executors
+  lineinfile:
+    path: "{{ jenkins_home }}/config.xml"
+    regexp: '<numExecutors>.*</numExecutors>'
+    line: '<numExecutors>{{ jenkins_num_executors | default(2) }}</numExecutors>'
+    backup: yes
+  notify: restart jenkins
+
+- name: Set Jenkins URL in system configuration
+  lineinfile:
+    path: "{{ jenkins_home }}/config.xml"
+    regexp: '<jenkinsUrl>.*</jenkinsUrl>'
+    line: '<jenkinsUrl>{{ jenkins_url | default("http://localhost:8080") }}</jenkinsUrl>'
+    backup: yes
+  notify: restart jenkins
+
+
+

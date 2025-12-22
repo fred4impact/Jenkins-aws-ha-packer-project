@@ -1,0 +1,36 @@
+<?xml version='1.1' encoding='UTF-8'?>
+<!--
+  Jenkins HA Configuration
+  This configuration enables High Availability for Jenkins
+-->
+<jenkins>
+  <numExecutors>2</numExecutors>
+  <mode>NORMAL</mode>
+  <useSecurity>true</useSecurity>
+  
+  <!-- HA Configuration -->
+  <clouds>
+    <org.jenkinsci.plugins.workflow.job.WorkflowJob>
+      <clouds/>
+    </org.jenkinsci.plugins.workflow.job.WorkflowJob>
+  </clouds>
+  
+  <!-- Shared Workspace Configuration -->
+  <workspaceDir>${JENKINS_HOME}/workspace/${ITEM_FULL_NAME}</workspaceDir>
+  <buildsDir>${ITEM_ROOTDIR}/builds</buildsDir>
+  
+  <!-- EFS Mount Point -->
+  <hudson>
+    <workspaceDir>${JENKINS_HOME}/workspace/${ITEM_FULL_NAME}</workspaceDir>
+  </hudson>
+  
+  <!-- Plugin Configuration -->
+  <installStateName>RUNNING</installStateName>
+  
+  <!-- Security Configuration -->
+  <authorizationStrategy class="hudson.security.FullControlOnceLoggedInAuthorizationStrategy"/>
+  
+  <!-- Session Configuration for HA -->
+  <sessionTimeout>60</sessionTimeout>
+</jenkins>
+

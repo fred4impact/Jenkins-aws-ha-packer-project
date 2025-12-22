@@ -1,0 +1,35 @@
+---
+# Group variables for all hosts
+
+# Jenkins configuration
+jenkins_version: "2.414.3"
+java_version: "17"
+jenkins_port: 8080
+jenkins_user: jenkins
+jenkins_group: jenkins
+jenkins_home: /var/lib/jenkins
+jenkins_num_executors: 2
+jenkins_url: "http://localhost:8080"
+jenkins_session_timeout: 60
+jenkins_security_enabled: true
+jenkins_cli_enabled: true
+jenkins_admin_email: "admin@example.com"
+
+# Security settings
+ssh_disable_password_auth: false
+security_updates_only: false
+
+# Firewall rules
+firewall_rules:
+  - { port: '22', protocol: 'tcp', description: 'SSH' }
+  - { port: '8080', protocol: 'tcp', description: 'Jenkins' }
+  - { port: '443', protocol: 'tcp', description: 'HTTPS' }
+  - { port: '80', protocol: 'tcp', description: 'HTTP' }
+
+# Services to disable
+disabled_services:
+  - bluetooth
+  - cups
+  - avahi-daemon
+
+

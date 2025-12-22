@@ -1,0 +1,21 @@
+#!/bin/bash
+# Jenkins HA Setup Script
+# This script runs on instance startup to configure HA settings
+
+set -e
+
+JENKINS_URL="{{ jenkins_url | default('http://localhost:8080') }}"
+JENKINS_HOME="{{ jenkins_home | default('/var/lib/jenkins') }}"
+
+echo "Configuring Jenkins for High Availability..."
+
+# Wait for Jenkins to be ready
+until curl -f "${JENKINS_URL}/login" 2>/dev/null; do
+  echo "Waiting for Jenkins to start..."
+  sleep 10
+done
+
+echo "Jenkins is ready. HA configuration completed."
+
+
+

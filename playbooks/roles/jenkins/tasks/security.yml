@@ -1,0 +1,47 @@
+---
+# Configure Jenkins security settings
+
+- name: Configure Jenkins security realm
+  template:
+    src: jenkins-security.xml.j2
+    dest: "{{ jenkins_home }}/config.xml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: restart jenkins
+  when: jenkins_security_enabled | default(true)
+
+- name: Set up Jenkins SSH keys directory
+  file:
+    path: "{{ jenkins_home }}/.ssh"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0700'
+
+- name: Configure CSRF protection
+  lineinfile:
+    path: "{{ jenkins_home }}/config.xml"
+    regexp: '<useCrumbs>.*</useCrumbs>'
+    line: '<useCrumbs>true</useCrumbs>'
+    backup: yes
+  notify: restart jenkins
+
+- name: Configure CLI access
+  lineinfile:
+    path: "{{ jenkins_home }}/config.xml"
+    regexp: '<remotingCLIEnabled>.*</remotingCLIEnabled>'
+    line: '<remotingCLIEnabled>true</remotingCLIEnabled>'
+    backup: yes
+  notify: restart jenkins
+
+- name: Set Jenkins session timeout
+  lineinfile:
+    path: "{{ jenkins_home }}/config.xml"
+    regexp: '<sessionTimeout>.*</sessionTimeout>'
+    line: '<sessionTimeout>{{ jenkins_session_timeout | default(60) }}</sessionTimeout>'
+    backup: yes
+  notify: restart jenkins
+
+
+

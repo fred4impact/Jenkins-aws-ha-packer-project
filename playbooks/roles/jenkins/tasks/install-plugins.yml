@@ -1,0 +1,39 @@
+---
+# Install Jenkins plugins
+
+- name: Ensure Jenkins plugins directory exists
+  file:
+    path: "{{ jenkins_home }}/plugins"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+
+- name: Download Jenkins plugin installer
+  get_url:
+    url: https://raw.githubusercontent.com/jenkinsci/docker/master/install-plugins.sh
+    dest: /tmp/install-plugins.sh
+    mode: '0755'
+
+- name: Install required Jenkins plugins
+  shell: |
+    /tmp/install-plugins.sh {{ item }}
+  args:
+    creates: "{{ jenkins_home }}/plugins/{{ item }}.jpi"
+  loop: "{{ jenkins_required_plugins }}"
+  become_user: "{{ jenkins_user }}"
+  environment:
+    JENKINS_UC: https://updates.jenkins.io
+    JENKINS_UC_EXPERIMENTAL: https://updates.jenkins.io/experimental
+    JENKINS_INCREMENTALS_REPO_MIRROR: https://repo.jenkins-ci.org/incrementals
+
+- name: Set plugin directory permissions
+  file:
+    path: "{{ jenkins_home }}/plugins"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+
+
+

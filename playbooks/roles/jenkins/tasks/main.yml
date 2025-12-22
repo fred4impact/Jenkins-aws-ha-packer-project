@@ -1,0 +1,85 @@
+---
+# Jenkins Role - Main Tasks
+# Configures Jenkins Master with required plugins and settings
+
+- name: Include OS-specific tasks
+  include_tasks: "{{ ansible_os_family }}.yml"
+  when: ansible_os_family in ['RedHat', 'Debian']
+  ignore_errors: yes
+  register: os_tasks_result
+
+- name: Wait for Jenkins service to be ready
+  wait_for:
+    path: /var/lib/jenkins/config.xml
+    timeout: 120
+  ignore_errors: yes
+  when: ansible_os_family == 'RedHat'
+
+- name: Ensure Jenkins user exists
+  user:
+    name: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    home: "{{ jenkins_home }}"
+    shell: /bin/bash
+    create_home: yes
+    system: yes
+
+- name: Create Jenkins directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+  loop:
+    - "{{ jenkins_home }}"
+    - "{{ jenkins_home }}/plugins"
+    - "{{ jenkins_home }}/jobs"
+    - "{{ jenkins_home }}/workspace"
+    - "{{ jenkins_home }}/.ssh"
+    - /opt/jenkins/init-scripts
+
+- name: Set Jenkins home directory permissions
+  file:
+    path: "{{ jenkins_home }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+    recurse: yes
+
+- name: Install Jenkins plugins
+  include_tasks: install-plugins.yml
+  tags:
+    - jenkins
+    - plugins
+  ignore_errors: yes
+
+- name: Configure Jenkins system settings
+  include_tasks: configure-jenkins.yml
+  tags:
+    - jenkins
+    - configuration
+  ignore_errors: yes
+
+- name: Configure Jenkins security
+  include_tasks: security.yml
+  tags:
+    - jenkins
+    - security
+  ignore_errors: yes
+
+- name: Setup Jenkins CLI
+  include_tasks: cli-setup.yml
+  tags:
+    - jenkins
+    - cli
+  ignore_errors: yes
+
+- name: Configure Jenkins for HA
+  include_tasks: ha-config.yml
+  tags:
+    - jenkins
+    - ha
+  ignore_errors: yes
+
+

@@ -1,0 +1,38 @@
+---
+# Configure Jenkins for High Availability
+
+- name: Create HA configuration directory
+  file:
+    path: /opt/jenkins/ha-config
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0755'
+
+- name: Configure Jenkins for shared workspace (EFS)
+  template:
+    src: jenkins-ha-config.xml.j2
+    dest: "{{ jenkins_home }}/config.xml"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0644'
+  notify: restart jenkins
+
+- name: Create HA initialization script
+  template:
+    src: ha-setup.sh.j2
+    dest: /opt/jenkins/init-scripts/ha-setup.sh
+    mode: '0755'
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+
+- name: Configure Jenkins to use EFS for workspace
+  lineinfile:
+    path: "{{ jenkins_home }}/config.xml"
+    regexp: '<workspaceDir>.*</workspaceDir>'
+    line: '<workspaceDir>${JENKINS_HOME}/workspace/${ITEM_FULL_NAME}</workspaceDir>'
+    backup: yes
+  notify: restart jenkins
+
+
+

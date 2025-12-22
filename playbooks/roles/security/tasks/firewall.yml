@@ -1,0 +1,64 @@
+---
+# Configure firewall rules
+
+- name: Ensure firewalld is installed (RedHat)
+  yum:
+    name: firewalld
+    state: present
+  when: ansible_os_family == 'RedHat'
+  tags:
+    - firewall
+    - security
+
+- name: Ensure ufw is installed (Debian)
+  apt:
+    name: ufw
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags:
+    - firewall
+    - security
+
+- name: Start and enable firewalld (RedHat)
+  systemd:
+    name: firewalld
+    state: started
+    enabled: yes
+  when: ansible_os_family == 'RedHat'
+  tags:
+    - firewall
+    - security
+
+- name: Configure firewalld rules (RedHat)
+  firewalld:
+    port: "{{ item.port }}/{{ item.protocol }}"
+    permanent: yes
+    state: enabled
+    immediate: yes
+  loop: "{{ firewall_rules }}"
+  when: ansible_os_family == 'RedHat'
+  tags:
+    - firewall
+    - security
+
+- name: Configure ufw rules (Debian)
+  ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.protocol }}"
+  loop: "{{ firewall_rules }}"
+  when: ansible_os_family == 'Debian'
+  tags:
+    - firewall
+    - security
+
+- name: Enable ufw (Debian)
+  ufw:
+    state: enabled
+  when: ansible_os_family == 'Debian'
+  tags:
+    - firewall
+    - security
+
+
+

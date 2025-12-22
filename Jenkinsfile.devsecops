@@ -1,0 +1,575 @@
+pipeline {
+    agent any
+    
+    environment {
+        // Application Configuration
+        JAVA_VERSION = '17'
+        MAVEN_VERSION = '3.9.5'
+        APP_NAME = 'my-application'
+        DOCKER_REGISTRY = 'your-registry.io'
+        DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
+        
+        // SonarQube Configuration
+        SONAR_HOST_URL = 'http://sonarqube:9000'
+        SONAR_TOKEN_CREDENTIAL_ID = 'sonar-token'
+        
+        // Security Tools
+        TRIVY_VERSION = 'latest'
+        OWASP_DEPENDENCY_CHECK_VERSION = '9.0.9'
+        
+        // Notification
+        SLACK_CHANNEL = '#devops-alerts'
+        EMAIL_RECIPIENTS = 'devops-team@yourcompany.com'
+    }
+    
+    options {
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+        ansiColor('xterm')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        skipStagesAfterUnstable()
+    }
+    
+    tools {
+        maven 'Maven-3.9.5'
+        jdk 'JDK-17'
+    }
+    
+    stages {
+        // ============================================
+        // STAGE 1: BUILD & UNIT TEST
+        // ============================================
+        stage('Build & Unit Test') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 1: BUILD & UNIT TEST WITH MAVEN"
+                    echo "============================================"
+                }
+                
+                dir('src') {
+                    // Clean and compile
+                    sh '''
+                        echo "Cleaning previous builds..."
+                        mvn clean
+                        
+                        echo "Compiling application..."
+                        mvn compile
+                    '''
+                    
+                    // Run unit tests
+                    sh '''
+                        echo "Running unit tests..."
+                        mvn test
+                    '''
+                    
+                    // Archive test results
+                    junit 'target/surefire-reports/*.xml'
+                }
+            }
+            
+            post {
+                always {
+                    script {
+                        // Archive build artifacts
+                        archiveArtifacts artifacts: 'target/*.jar', fingerprint: true, allowEmptyArchive: true
+                    }
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 2: CODE COVERAGE
+        // ============================================
+        stage('Code Coverage') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 2: CODE COVERAGE WITH JACOCO"
+                    echo "============================================"
+                }
+                
+                dir('src') {
+                    // Generate code coverage report
+                    sh '''
+                        echo "Generating code coverage report with JaCoCo..."
+                        mvn clean test jacoco:report
+                    '''
+                    
+                    // Publish coverage report
+                    publishHTML([
+                        reportName: 'JaCoCo Code Coverage Report',
+                        reportDir: 'target/site/jacoco',
+                        reportFiles: 'index.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true
+                    ])
+                    
+                    // Read coverage metrics
+                    script {
+                        def coverageFile = readFile('target/site/jacoco/jacoco.xml')
+                        def coverageMatch = coverageFile =~ /type="INSTRUCTION".*missed="(\d+)".*covered="(\d+)"/
+                        if (coverageMatch) {
+                            def missed = coverageMatch[0][1] as Integer
+                            def covered = coverageMatch[0][2] as Integer
+                            def total = missed + covered
+                            def coveragePercent = (covered / total) * 100
+                            
+                            env.CODE_COVERAGE = String.format("%.2f", coveragePercent)
+                            echo "Code Coverage: ${env.CODE_COVERAGE}%"
+                            
+                            // Fail if coverage is below threshold
+                            if (coveragePercent < 80) {
+                                error("Code coverage ${coveragePercent}% is below threshold of 80%")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 3: SCA (Software Composition Analysis)
+        // ============================================
+        stage('SCA') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 3: SOFTWARE COMPOSITION ANALYSIS"
+                    echo "============================================"
+                }
+                
+                dir('src') {
+                    // Run OWASP Dependency-Check for SCA
+                    sh '''
+                        echo "Running OWASP Dependency-Check for SCA..."
+                        mvn org.owasp:dependency-check-maven:check
+                    '''
+                    
+                    // Publish dependency check report
+                    publishHTML([
+                        reportName: 'OWASP Dependency-Check Report',
+                        reportDir: 'target',
+                        reportFiles: 'dependency-check-report.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true
+                    ])
+                    
+                    // Parse and validate SCA results
+                    script {
+                        def reportFile = readFile('target/dependency-check-report.json')
+                        def report = readJSON text: reportFile
+                        
+                        def criticalCount = 0
+                        def highCount = 0
+                        def mediumCount = 0
+                        
+                        report.dependencies.each { dependency ->
+                            dependency.vulnerabilities.each { vuln ->
+                                switch(vuln.severity) {
+                                    case 'CRITICAL':
+                                        criticalCount++
+                                        break
+                                    case 'HIGH':
+                                        highCount++
+                                        break
+                                    case 'MEDIUM':
+                                        mediumCount++
+                                        break
+                                }
+                            }
+                        }
+                        
+                        env.SCA_CRITICAL = criticalCount.toString()
+                        env.SCA_HIGH = highCount.toString()
+                        env.SCA_MEDIUM = mediumCount.toString()
+                        
+                        echo "SCA Results - Critical: ${criticalCount}, High: ${highCount}, Medium: ${mediumCount}"
+                        
+                        // Fail pipeline if critical vulnerabilities found
+                        if (criticalCount > 0) {
+                            error("❌ CRITICAL: Found ${criticalCount} critical vulnerabilities in dependencies. Fix before proceeding.")
+                        }
+                        
+                        if (highCount > 10) {
+                            error("❌ HIGH: Found ${highCount} high severity vulnerabilities. Review and fix before proceeding.")
+                        }
+                    }
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 4: SAST (Static Application Security Testing)
+        // ============================================
+        stage('SAST') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 4: STATIC APPLICATION SECURITY TESTING"
+                    echo "============================================"
+                }
+                
+                dir('src') {
+                    // Run SpotBugs or similar SAST tool
+                    sh '''
+                        echo "Running SpotBugs for SAST analysis..."
+                        mvn spotbugs:check spotbugs:gui
+                    '''
+                    
+                    // Publish SpotBugs report
+                    publishHTML([
+                        reportName: 'SpotBugs SAST Report',
+                        reportDir: 'target',
+                        reportFiles: 'spotbugsXml.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true
+                    ])
+                    
+                    // Alternative: Use SonarQube Scanner for SAST
+                    script {
+                        echo "Running SonarQube Scanner for SAST..."
+                        withCredentials([string(credentialsId: env.SONAR_TOKEN_CREDENTIAL_ID, variable: 'SONAR_TOKEN')]) {
+                            sh '''
+                                mvn sonar:sonar \
+                                    -Dsonar.host.url=${SONAR_HOST_URL} \
+                                    -Dsonar.login=${SONAR_TOKEN} \
+                                    -Dsonar.projectKey=${APP_NAME} \
+                                    -Dsonar.projectName=${APP_NAME}
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 5: QUALITY GATES
+        // ============================================
+        stage('Quality Gates') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 5: QUALITY GATES WITH SONARQUBE"
+                    echo "============================================"
+                }
+                
+                dir('src') {
+                    // Wait for SonarQube analysis to complete
+                    script {
+                        withCredentials([string(credentialsId: env.SONAR_TOKEN_CREDENTIAL_ID, variable: 'SONAR_TOKEN')]) {
+                            def sonarTaskUrl = sh(
+                                script: """
+                                    curl -u \${SONAR_TOKEN}: \
+                                        '${SONAR_HOST_URL}/api/ce/task?id=\$(cat target/sonar/report-task.txt | grep ceTaskId | cut -d'=' -f2)'
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            
+                            echo "Waiting for SonarQube analysis to complete..."
+                            sleep(time: 30, unit: 'SECONDS')
+                            
+                            // Get quality gate status
+                            def qualityGateStatus = sh(
+                                script: """
+                                    curl -u \${SONAR_TOKEN}: \
+                                        '${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${APP_NAME}' \
+                                        | jq -r '.projectStatus.status'
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            
+                            echo "SonarQube Quality Gate Status: ${qualityGateStatus}"
+                            
+                            // Fail if quality gate fails
+                            if (qualityGateStatus == 'ERROR' || qualityGateStatus == 'FAILED') {
+                                error("❌ Quality Gate FAILED. Check SonarQube dashboard for details.")
+                            }
+                            
+                            env.QUALITY_GATE_STATUS = qualityGateStatus
+                        }
+                    }
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 6: BUILD IMAGE
+        // ============================================
+        stage('Build Image') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 6: BUILD DOCKER IMAGE"
+                    echo "============================================"
+                }
+                
+                // Build Docker image
+                script {
+                    def dockerImage = "${DOCKER_REGISTRY}/${APP_NAME}:${DOCKER_IMAGE_TAG}"
+                    def dockerImageLatest = "${DOCKER_REGISTRY}/${APP_NAME}:latest"
+                    
+                    sh """
+                        echo "Building Docker image: ${dockerImage}"
+                        docker build -t ${dockerImage} -t ${dockerImageLatest} -f Dockerfile .
+                    '''
+                    
+                    // Tag image with build number
+                    sh """
+                        docker tag ${dockerImage} ${dockerImage}
+                        docker tag ${dockerImage} ${dockerImageLatest}
+                    """
+                    
+                    env.DOCKER_IMAGE = dockerImage
+                    echo "✓ Docker image built: ${dockerImage}"
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 7: SCAN IMAGE
+        // ============================================
+        stage('Scan Image') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 7: SCAN DOCKER IMAGE WITH AQUA TRIVY"
+                    echo "============================================"
+                }
+                
+                script {
+                    def dockerImage = env.DOCKER_IMAGE
+                    def scanReport = "trivy-scan-report-${BUILD_NUMBER}.json"
+                    def scanReportHtml = "trivy-scan-report-${BUILD_NUMBER}.html"
+                    
+                    // Pull latest Trivy image
+                    sh "docker pull aquasec/trivy:${TRIVY_VERSION}"
+                    
+                    // Scan Docker image with Trivy
+                    sh """
+                        docker run --rm \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            -v \$(pwd):/workspace \
+                            -w /workspace \
+                            aquasec/trivy:${TRIVY_VERSION} \
+                            image --format json \
+                            --output ${scanReport} \
+                            --exit-code 0 \
+                            --severity HIGH,CRITICAL \
+                            ${dockerImage}
+                    """
+                    
+                    // Generate HTML report
+                    sh """
+                        docker run --rm \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            -v \$(pwd):/workspace \
+                            -w /workspace \
+                            aquasec/trivy:${TRIVY_VERSION} \
+                            image --format template \
+                            --template '@contrib/html.tpl' \
+                            --output ${scanReportHtml} \
+                            --severity HIGH,CRITICAL \
+                            ${dockerImage}
+                    """
+                    
+                    // Publish HTML report
+                    publishHTML([
+                        reportName: 'Trivy Security Scan Report',
+                        reportDir: '.',
+                        reportFiles: scanReportHtml,
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true
+                    ])
+                    
+                    // Parse scan results
+                    script {
+                        def scanResults = readJSON file: scanReport
+                        def criticalCount = 0
+                        def highCount = 0
+                        
+                        scanResults.Results.each { result ->
+                            result.Vulnerabilities.each { vuln ->
+                                if (vuln.Severity == 'CRITICAL') {
+                                    criticalCount++
+                                } else if (vuln.Severity == 'HIGH') {
+                                    highCount++
+                                }
+                            }
+                        }
+                        
+                        env.TRIVY_CRITICAL = criticalCount.toString()
+                        env.TRIVY_HIGH = highCount.toString()
+                        
+                        echo "Trivy Scan Results - Critical: ${criticalCount}, High: ${highCount}"
+                        
+                        // Fail pipeline if critical vulnerabilities found
+                        if (criticalCount > 0) {
+                            error("❌ CRITICAL: Found ${criticalCount} critical vulnerabilities in Docker image. Image cannot be deployed.")
+                        }
+                        
+                        if (highCount > 5) {
+                            error("❌ HIGH: Found ${highCount} high severity vulnerabilities. Review before deployment.")
+                        }
+                        
+                        echo "✓ Image scan completed successfully"
+                    }
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 8: SMOKE TEST
+        // ============================================
+        stage('Smoke Test') {
+            steps {
+                script {
+                    echo "============================================"
+                    echo "STAGE 8: SMOKE TEST"
+                    echo "============================================"
+                }
+                
+                script {
+                    def dockerImage = env.DOCKER_IMAGE
+                    
+                    // Run container for smoke testing
+                    sh """
+                        echo "Starting container for smoke tests..."
+                        docker run -d --name smoke-test-${BUILD_NUMBER} \
+                            -p 8080:8080 \
+                            ${dockerImage}
+                    """
+                    
+                    // Wait for application to start
+                    sh 'sleep 10'
+                    
+                    // Run smoke tests
+                    sh """
+                        echo "Running smoke tests..."
+                        # Health check
+                        curl -f http://localhost:8080/health || exit 1
+                        
+                        # API endpoint check
+                        curl -f http://localhost:8080/api/status || exit 1
+                        
+                        echo "✓ Smoke tests passed"
+                    """
+                    
+                    // Cleanup
+                    sh """
+                        docker stop smoke-test-${BUILD_NUMBER} || true
+                        docker rm smoke-test-${BUILD_NUMBER} || true
+                    """
+                }
+            }
+        }
+        
+        // ============================================
+        // STAGE 9: PUSH IMAGE (Optional)
+        // ============================================
+        stage('Push Image') {
+            when {
+                allOf {
+                    expression { env.DOCKER_REGISTRY != 'your-registry.io' }
+                    not { expression { currentBuild.result == 'FAILURE' } }
+                }
+            }
+            steps {
+                script {
+                    echo "============================================"
+                    echo "PUSHING DOCKER IMAGE TO REGISTRY"
+                    echo "============================================"
+                    
+                    def dockerImage = env.DOCKER_IMAGE
+                    def dockerImageLatest = "${DOCKER_REGISTRY}/${APP_NAME}:latest"
+                    
+                    withCredentials([usernamePassword(credentialsId: 'docker-registry-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh """
+                            echo \${DOCKER_PASS} | docker login ${DOCKER_REGISTRY} -u \${DOCKER_USER} --password-stdin
+                            docker push ${dockerImage}
+                            docker push ${dockerImageLatest}
+                        """
+                    }
+                    
+                    echo "✓ Docker image pushed to registry"
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                echo "============================================"
+                echo "✅ PIPELINE SUCCEEDED"
+                echo "============================================"
+                echo "Build Number: ${BUILD_NUMBER}"
+                echo "Docker Image: ${env.DOCKER_IMAGE ?: 'N/A'}"
+                echo "Code Coverage: ${env.CODE_COVERAGE ?: 'N/A'}%"
+                echo "Quality Gate: ${env.QUALITY_GATE_STATUS ?: 'N/A'}"
+                echo "============================================"
+                
+                // Send success notification
+                // slackSend(
+                //     channel: env.SLACK_CHANNEL,
+                //     color: 'good',
+                //     message: """
+                //         ✅ DevSecOps Pipeline Succeeded
+                //         Build: ${BUILD_URL}
+                //         Image: ${env.DOCKER_IMAGE ?: 'N/A'}
+                //         Coverage: ${env.CODE_COVERAGE ?: 'N/A'}%
+                //     """
+                // )
+            }
+        }
+        
+        failure {
+            script {
+                echo "============================================"
+                echo "❌ PIPELINE FAILED"
+                echo "============================================"
+                echo "Build Number: ${BUILD_NUMBER}"
+                echo "Check logs for details: ${BUILD_URL}"
+                echo "============================================"
+                
+                // Send failure notification
+                // slackSend(
+                //     channel: env.SLACK_CHANNEL,
+                //     color: 'danger',
+                //     message: """
+                //         ❌ DevSecOps Pipeline Failed
+                //         Build: ${BUILD_URL}
+                //         Stage: ${env.STAGE_NAME ?: 'Unknown'}
+                //     """
+                // )
+                
+                // emailext(
+                //     subject: "❌ DevSecOps Pipeline Failed - ${JOB_NAME} #${BUILD_NUMBER}",
+                //     body: """
+                //         <h2>Pipeline Failed</h2>
+                //         <p><b>Job:</b> ${JOB_NAME}</p>
+                //         <p><b>Build:</b> ${BUILD_NUMBER}</p>
+                //         <p><b>URL:</b> <a href="${BUILD_URL}">${BUILD_URL}</a></p>
+                //         <p>Please check the logs for details.</p>
+                //     """,
+                //     to: env.EMAIL_RECIPIENTS,
+                //     mimeType: 'text/html'
+                // )
+            }
+        }
+        
+        always {
+            script {
+                // Cleanup Docker containers and images
+                sh '''
+                    docker ps -aq --filter "name=smoke-test-${BUILD_NUMBER}" | xargs -r docker rm -f || true
+                    docker images -q --filter "dangling=true" | xargs -r docker rmi || true
+                '''
+                
+                // Archive all reports
+                archiveArtifacts artifacts: '**/*.html, **/*.json, **/*.xml', fingerprint: true, allowEmptyArchive: true
+            }
+        }
+    }
+}
+

@@ -1,0 +1,49 @@
+---
+# Install and configure security tools
+
+- name: Configure fail2ban
+  template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    mode: '0644'
+  notify: restart fail2ban
+  tags:
+    - security
+    - tools
+
+- name: Start and enable fail2ban
+  systemd:
+    name: fail2ban
+    state: started
+    enabled: yes
+  tags:
+    - security
+    - tools
+
+- name: Initialize AIDE database
+  command: aide --init
+  args:
+    creates: /var/lib/aide/aide.db.new
+  tags:
+    - security
+    - tools
+
+- name: Move AIDE database
+  command: mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+  when: not (stat('/var/lib/aide/aide.db', follow=False).stat.exists)
+  tags:
+    - security
+    - tools
+
+- name: Schedule AIDE checks
+  cron:
+    name: "AIDE integrity check"
+    minute: "0"
+    hour: "2"
+    job: "/usr/sbin/aide --check"
+  tags:
+    - security
+    - tools
+
+
+

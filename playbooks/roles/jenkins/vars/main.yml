@@ -1,0 +1,49 @@
+---
+# Jenkins Role Variables
+
+jenkins_version: "2.414.3"
+java_version: "17"
+jenkins_port: 8080
+jenkins_user: jenkins
+jenkins_group: jenkins
+jenkins_home: /var/lib/jenkins
+jenkins_num_executors: 2
+jenkins_url: "http://localhost:8080"
+jenkins_session_timeout: 60
+jenkins_security_enabled: true
+jenkins_cli_enabled: true
+
+# Required Jenkins plugins
+jenkins_required_plugins:
+  - workflow-aggregator
+  - pipeline-stage-view
+  - pipeline-github
+  - docker-workflow
+  - docker-plugin
+  - aws-credentials
+  - aws-ec2
+  - credentials-binding
+  - git
+  - github
+  - github-branch-source
+  - blueocean
+  - ansible
+  - terraform
+  - kubernetes
+  - kubernetes-cli
+  - configuration-as-code
+  - job-dsl
+  - build-timeout
+  - timestamper
+  - ws-cleanup
+  - warnings-ng
+  - junit
+  - htmlpublisher
+  - email-ext
+  - slack
+  - sonar
+  - checkstyle
+  - pmd
+  - findbugs
+
+

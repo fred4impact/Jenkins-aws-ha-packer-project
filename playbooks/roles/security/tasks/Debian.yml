@@ -1,0 +1,23 @@
+---
+# Debian/Ubuntu security tasks
+
+- name: Install security packages
+  apt:
+    name:
+      - fail2ban
+      - aide
+      - rkhunter
+      - chkrootkit
+    state: present
+    update_cache: yes
+
+- name: Install audit tools
+  apt:
+    name:
+      - auditd
+      - audispd-plugins
+    state: present
+    update_cache: yes
+
+
+

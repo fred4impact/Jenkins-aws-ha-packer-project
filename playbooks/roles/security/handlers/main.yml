@@ -1,0 +1,23 @@
+---
+# Security Role Handlers
+
+- name: restart sshd
+  systemd:
+    name: sshd
+    state: restarted
+  when: ansible_service_mgr == 'systemd'
+
+- name: restart fail2ban
+  systemd:
+    name: fail2ban
+    state: restarted
+  when: ansible_service_mgr == 'systemd'
+
+- name: restart unattended-upgrades
+  systemd:
+    name: unattended-upgrades
+    state: restarted
+  when: ansible_service_mgr == 'systemd'
+
+
+

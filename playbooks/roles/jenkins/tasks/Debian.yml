@@ -1,0 +1,45 @@
+---
+# Debian/Ubuntu specific tasks
+
+- name: Install Java
+  apt:
+    name:
+      - openjdk-{{ java_version }}-jdk
+      - openjdk-{{ java_version }}-jre
+    state: present
+    update_cache: yes
+  vars:
+    java_version: "{{ java_version | default('17') }}"
+
+- name: Add Jenkins repository key
+  apt_key:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+    state: present
+
+- name: Add Jenkins repository
+  apt_repository:
+    repo: "deb https://pkg.jenkins.io/debian-stable binary/"
+    state: present
+    filename: jenkins
+
+- name: Install Jenkins
+  apt:
+    name: "jenkins={{ jenkins_version | default('2.414.3') }}"
+    state: present
+    update_cache: yes
+
+- name: Install additional packages
+  apt:
+    name:
+      - git
+      - unzip
+      - curl
+      - wget
+      - jq
+      - python3
+      - python3-pip
+    state: present
+    update_cache: yes
+
+
+

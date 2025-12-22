@@ -1,0 +1,60 @@
+---
+# SSH security hardening
+
+- name: Backup SSH configuration
+  copy:
+    src: /etc/ssh/sshd_config
+    dest: /etc/ssh/sshd_config.backup
+    remote_src: yes
+  tags:
+    - ssh
+    - security
+
+- name: Configure SSH security settings
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    backup: yes
+  loop: "{{ ssh_security_settings }}"
+  notify: restart sshd
+  tags:
+    - ssh
+    - security
+
+- name: Disable root login via SSH
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin no'
+    backup: yes
+  notify: restart sshd
+  tags:
+    - ssh
+    - security
+
+- name: Disable password authentication (use keys only)
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+    backup: yes
+  when: ssh_disable_password_auth | default(false)
+  notify: restart sshd
+  tags:
+    - ssh
+    - security
+
+- name: Set SSH protocol version
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?Protocol'
+    line: 'Protocol 2'
+    backup: yes
+  notify: restart sshd
+  tags:
+    - ssh
+    - security
+
+
+

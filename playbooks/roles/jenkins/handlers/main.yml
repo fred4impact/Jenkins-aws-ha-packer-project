@@ -1,0 +1,24 @@
+---
+# Jenkins Handlers
+
+- name: restart jenkins
+  systemd:
+    name: jenkins
+    state: restarted
+    enabled: yes
+  when: ansible_service_mgr == 'systemd'
+
+- name: start jenkins
+  systemd:
+    name: jenkins
+    state: started
+    enabled: yes
+  when: ansible_service_mgr == 'systemd'
+
+- name: stop jenkins
+  systemd:
+    name: jenkins
+    state: stopped
+  when: ansible_service_mgr == 'systemd'
+
+

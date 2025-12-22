@@ -1,0 +1,48 @@
+---
+# Main Ansible Playbook for Jenkins Master Configuration
+# This playbook configures Jenkins Master, applies OS updates, and security hardening
+# Used during Packer AMI build process
+
+- name: Configure Jenkins Master and Apply Security Hardening
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    jenkins_home: /var/lib/jenkins
+    jenkins_user: jenkins
+    jenkins_group: jenkins
+    jenkins_port: 8080
+    
+  pre_tasks:
+    - name: Update package cache
+      package:
+        update_cache: yes
+      when: ansible_pkg_mgr == 'apt' or ansible_pkg_mgr == 'yum'
+    
+    - name: Gather OS information
+      setup:
+        gather_subset:
+          - all
+    
+  roles:
+    - role: security
+      tags:
+        - security
+        - os-updates
+    
+    - role: jenkins
+      tags:
+        - jenkins
+        - configuration
+  
+  post_tasks:
+    - name: Display Jenkins configuration summary
+      debug:
+        msg:
+          - "Jenkins Home: {{ jenkins_home }}"
+          - "Jenkins Port: {{ jenkins_port }}"
+          - "Jenkins User: {{ jenkins_user }}"
+          - "Configuration completed successfully"
+
+
