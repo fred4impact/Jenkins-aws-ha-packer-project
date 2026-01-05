@@ -1,0 +1,56 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+terraform.tfvars
+*.tfplan
+tfplan
+.terraform.tfstate.lock.info
+
+# Packer
+packer/manifest.json
+packer/packer-build.log
+packer/jenkinsrole.tar
+*.pkr.hcl.bak
+
+# Ansible
+*.retry
+.vault_pass
+hosts.local
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CI/CD
+ami-id.txt
+terraform-outputs.json
+trivy-report.*
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Secrets
+secrets/
+*.pem
+*.key
+!*.pub
+

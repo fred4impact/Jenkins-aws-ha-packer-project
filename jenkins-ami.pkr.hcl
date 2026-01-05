@@ -21,14 +21,14 @@ source "amazon-ebs" "jenkins" {
   region        = var.aws_region
   source_ami_filter {
     filters = {
-      name                = "amzn2-ami-hvm-*-x86_64-gp2"
+      name                = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
       root-device-type    = "ebs"
       virtualization-type = "hvm"
     }
     most_recent = true
-    owners      = ["amazon"]
+    owners      = ["099720109477"]  # Canonical (Ubuntu)
   }
-  ssh_username = "ec2-user"
+  ssh_username = "ubuntu"
   tags = {
     Name        = "Jenkins HA AMI"
     Environment = "Production"
@@ -54,7 +54,7 @@ build {
 
   provisioner "ansible" {
     playbook_file = "../playbooks/jenkins-setup.yml"
-    user          = "ec2-user"
+    user          = "ubuntu"
     extra_arguments = [
       "--extra-vars", "jenkins_version=${var.jenkins_version}",
       "--extra-vars", "java_version=${var.java_version}",
@@ -70,7 +70,7 @@ build {
   provisioner "shell" {
     inline = [
       "sudo systemctl enable jenkins",
-      "sudo systemctl enable amazon-ssm-agent",
+      "sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service || sudo systemctl enable amazon-ssm-agent",
       "sudo systemctl enable docker",
       "sudo usermod -aG docker jenkins",
       "sudo mkdir -p /opt/jenkins",

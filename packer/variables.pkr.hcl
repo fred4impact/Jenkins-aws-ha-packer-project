@@ -16,3 +16,23 @@ variable "java_version" {
   default     = "17"
 }
 
+variable "efs_id" {
+  type        = string
+  description = "EFS File System ID (passed from Terraform)"
+  default     = ""
+}
+
+variable "aws_access_key" {
+  type        = string
+  description = "AWS Access Key (optional, can use IAM role)"
+  default     = ""
+  sensitive   = true
+}
+
+variable "aws_secret_key" {
+  type        = string
+  description = "AWS Secret Key (optional, can use IAM role)"
+  default     = ""
+  sensitive   = true
+}
+

@@ -650,11 +650,11 @@ INSTANCE_IP=$(aws ec2 describe-instances \
     --output text)
 
 # Check Jenkins service status
-ssh -i ~/.ssh/jenkins-ha-keypair.pem ec2-user@$INSTANCE_IP \
+ssh -i ~/.ssh/jenkins-ha-keypair.pem ubuntu@$INSTANCE_IP \
     "sudo systemctl status jenkins"
 
 # Check EFS mount
-ssh -i ~/.ssh/jenkins-ha-keypair.pem ec2-user@$INSTANCE_IP \
+ssh -i ~/.ssh/jenkins-ha-keypair.pem ubuntu@$INSTANCE_IP \
     "df -h | grep efs"
 ```
 

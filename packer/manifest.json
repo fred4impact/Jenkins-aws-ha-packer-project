@@ -8,7 +8,16 @@
       "artifact_id": "us-east-1:ami-0d627eb3c996ceeee",
       "packer_run_uuid": "8f8c115d-0aca-393e-fa13-b39e8504a6dc",
       "custom_data": null
+    },
+    {
+      "name": "jenkins",
+      "builder_type": "amazon-ebs",
+      "build_time": 1766530800,
+      "files": null,
+      "artifact_id": "us-east-1:ami-0a67d2ced736afea4",
+      "packer_run_uuid": "d9af072e-47ff-fa18-33e3-8be6a318fad3",
+      "custom_data": null
     }
   ],
-  "last_run_uuid": "8f8c115d-0aca-393e-fa13-b39e8504a6dc"
+  "last_run_uuid": "d9af072e-47ff-fa18-33e3-8be6a318fad3"
 }

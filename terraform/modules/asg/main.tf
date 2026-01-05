@@ -12,12 +12,13 @@ resource "aws_launch_template" "jenkins" {
   }
 
   user_data = base64encode(templatefile("${path.module}/user-data.sh", {
-    efs_id              = var.efs_id
-    efs_dns_name        = var.efs_dns_name
-    jenkins_admin_user  = var.jenkins_admin_user
-    jenkins_admin_pass  = var.jenkins_admin_pass
-    region              = var.region
-    project_name        = var.project_name
+    efs_id             = var.efs_id
+    efs_dns_name       = var.efs_dns_name
+    mount_point        = "/var/lib/jenkins"
+    jenkins_admin_user = var.jenkins_admin_user
+    jenkins_admin_pass = var.jenkins_admin_pass
+    region             = var.region
+    project_name       = var.project_name
   }))
 
   block_device_mappings {
@@ -49,10 +50,10 @@ resource "aws_launch_template" "jenkins" {
 
 # Auto Scaling Group
 resource "aws_autoscaling_group" "jenkins" {
-  name                = "${var.project_name}-jenkins-asg"
-  vpc_zone_identifier = var.subnet_ids
-  target_group_arns   = var.target_group_arns
-  health_check_type   = "ELB"
+  name                      = "${var.project_name}-jenkins-asg"
+  vpc_zone_identifier       = var.subnet_ids
+  target_group_arns         = var.target_group_arns
+  health_check_type         = "ELB"
   health_check_grace_period = 300
 
   min_size         = var.min_size

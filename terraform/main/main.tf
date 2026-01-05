@@ -10,9 +10,9 @@ terraform {
 
   backend "s3" {
     # Configure backend in backend.tf or via CLI
-    # bucket = "demo-terra-state-bucket"
-    # key    = "ha-jenkins/terraform.tfstate"
-    # region = "us-east-1"
+    bucket = "demo-terra-state-bucket"
+    key    = "ha-jenkins/terraform.tfstate"
+    region = "us-east-1"
   }
 }
 
@@ -112,11 +112,12 @@ module "elb" {
 }
 
 # ASG Module
+# Use dynamically built AMI if build_ami_with_packer is true, otherwise use provided AMI ID
 module "asg" {
   source = "../modules/asg"
 
   project_name       = var.project_name
-  ami_id             = var.jenkins_ami_id
+  ami_id             = var.build_ami_with_packer ? (data.external.packer_ami_id.result.ami_id != "" ? data.external.packer_ami_id.result.ami_id : var.jenkins_ami_id) : var.jenkins_ami_id
   instance_type      = var.instance_type
   key_name           = var.key_name
   subnet_ids         = module.vpc.private_subnet_ids
@@ -133,6 +134,8 @@ module "asg" {
   jenkins_admin_pass = var.jenkins_admin_pass
 
   tags = local.common_tags
+
+  depends_on = [null_resource.build_jenkins_ami, data.external.packer_ami_id]
 }
 
 # S3 Bucket for Jenkins Artifacts
@@ -175,6 +178,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "jenkins_artifacts" {
   rule {
     id     = "delete-old-artifacts"
     status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
 
     expiration {
       days = var.artifact_retention_days

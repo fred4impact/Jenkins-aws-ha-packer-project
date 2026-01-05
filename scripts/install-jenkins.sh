@@ -2,14 +2,34 @@
 set -e
 
 # Update system
-sudo yum update -y
+sudo apt-get update -y
+sudo apt-get upgrade -y
 
 # Install Java
 JAVA_VERSION=${JAVA_VERSION:-17}
-sudo yum install -y java-${JAVA_VERSION}-openjdk java-${JAVA_VERSION}-openjdk-devel
+sudo apt-get install -y openjdk-${JAVA_VERSION}-jdk openjdk-${JAVA_VERSION}-jre
 
 # Install Docker
-sudo yum install -y docker
+sudo apt-get install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
+
+# Add Docker's official GPG key
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+# Set up Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker Engine
+sudo apt-get update -y
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Start and enable Docker
 sudo systemctl start docker
 sudo systemctl enable docker
 
@@ -20,25 +40,41 @@ sudo ./aws/install
 rm -rf aws awscliv2.zip
 
 # Install EFS utilities
-sudo yum install -y amazon-efs-utils
+sudo apt-get install -y binutils
+git clone https://github.com/aws/efs-utils
+cd efs-utils
+sudo ./build-deb.sh
+sudo apt-get install -y ./build/amazon-efs-utils*.deb
+cd ..
+rm -rf efs-utils
 
 # Install Jenkins
 JENKINS_VERSION=${JENKINS_VERSION:-2.414.3}
-sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
-sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
-sudo yum install -y jenkins-${JENKINS_VERSION}
+
+# Add Jenkins repository key
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | sudo tee \
+  /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+
+# Add Jenkins repository
+echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+  https://pkg.jenkins.io/debian-stable binary/ | sudo tee \
+  /etc/apt/sources.list.d/jenkins.list > /dev/null
+
+# Update package list and install Jenkins
+sudo apt-get update -y
+sudo apt-get install -y jenkins=${JENKINS_VERSION}
 
 # Install required plugins (will be configured on first boot)
 sudo mkdir -p /var/lib/jenkins/plugins
 sudo chown -R jenkins:jenkins /var/lib/jenkins
 
 # Install CloudWatch agent
-wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
-sudo rpm -U ./amazon-cloudwatch-agent.rpm
-rm amazon-cloudwatch-agent.rpm
+wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+sudo dpkg -i -E ./amazon-cloudwatch-agent.deb
+rm amazon-cloudwatch-agent.deb
 
 # Install SSM Agent (usually pre-installed, but ensure it's running)
-sudo systemctl enable amazon-ssm-agent
+sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service || sudo systemctl enable amazon-ssm-agent
 
 # Configure Jenkins directories
 sudo mkdir -p /var/lib/jenkins/.ssh
@@ -62,7 +98,9 @@ chmod +x kubectl
 sudo mv kubectl /usr/local/bin/
 
 # Clean up
-sudo yum clean all
+sudo apt-get autoremove -y
+sudo apt-get clean
+sudo rm -rf /var/lib/apt/lists/*
 sudo rm -rf /tmp/*
 
 echo "Jenkins installation completed successfully"

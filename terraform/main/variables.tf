@@ -36,7 +36,28 @@ variable "private_subnet_cidrs" {
 
 variable "jenkins_ami_id" {
   type        = string
-  description = "AMI ID for Jenkins instances (built with Packer)"
+  description = "AMI ID for Jenkins instances (built with Packer). Leave empty to build automatically."
+  default     = ""
+}
+
+variable "aws_access_key" {
+  type        = string
+  description = "AWS Access Key for Packer build (optional, can use IAM role)"
+  default     = ""
+  sensitive   = true
+}
+
+variable "aws_secret_key" {
+  type        = string
+  description = "AWS Secret Key for Packer build (optional, can use IAM role)"
+  default     = ""
+  sensitive   = true
+}
+
+variable "build_ami_with_packer" {
+  type        = bool
+  description = "Whether to build AMI with Packer (true) or use existing AMI ID (false)"
+  default     = true
 }
 
 variable "instance_type" {
@@ -122,6 +143,18 @@ variable "artifact_retention_days" {
   type        = number
   description = "Number of days to retain Jenkins artifacts in S3"
   default     = 90
+}
+
+variable "jenkins_version" {
+  type        = string
+  description = "Jenkins version to install (used when building AMI with Packer)"
+  default     = "2.414.3"
+}
+
+variable "java_version" {
+  type        = string
+  description = "Java version to install (used when building AMI with Packer)"
+  default     = "17"
 }
 
 variable "tags" {

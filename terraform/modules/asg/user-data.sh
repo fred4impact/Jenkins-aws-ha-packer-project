@@ -4,35 +4,48 @@ set -e
 # Mount EFS
 EFS_ID="${efs_id}"
 EFS_DNS_NAME="${efs_dns_name}"
-MOUNT_POINT="/var/lib/jenkins"
+MOUNT_POINT="${mount_point}"
 
 # Install EFS utilities if not already installed
-yum install -y amazon-efs-utils
+# EFS utils should already be installed in the AMI, but ensure it's available
+if ! command -v mount.efs &> /dev/null; then
+    apt-get update -y
+    apt-get install -y binutils
+    git clone https://github.com/aws/efs-utils /tmp/efs-utils
+    cd /tmp/efs-utils
+    ./build-deb.sh
+    apt-get install -y ./build/amazon-efs-utils*.deb
+    cd /
+    rm -rf /tmp/efs-utils
+fi
 
 # Create mount point
-mkdir -p ${MOUNT_POINT}
+mkdir -p $${MOUNT_POINT}
 
 # Mount EFS
-echo "${EFS_DNS_NAME}:/ ${MOUNT_POINT} efs defaults,_netdev,tls,iam 0 0" >> /etc/fstab
+echo "$${EFS_DNS_NAME}:/ $${MOUNT_POINT} efs defaults,_netdev,tls,iam 0 0" >> /etc/fstab
 mount -a
 
 # Set proper permissions
-chown -R jenkins:jenkins ${MOUNT_POINT}
-chmod 755 ${MOUNT_POINT}
+chown -R jenkins:jenkins $${MOUNT_POINT}
+chmod 755 $${MOUNT_POINT}
 
 # Configure Jenkins for HA
-JENKINS_HOME="${MOUNT_POINT}"
-JENKINS_CONFIG="/etc/sysconfig/jenkins"
+JENKINS_HOME="$${MOUNT_POINT}"
+# On Ubuntu, Jenkins config is in /etc/default/jenkins instead of /etc/sysconfig/jenkins
+JENKINS_CONFIG="/etc/default/jenkins"
 
-# Update Jenkins configuration
-sed -i "s|JENKINS_HOME=.*|JENKINS_HOME=${JENKINS_HOME}|g" ${JENKINS_CONFIG}
-
-# Configure Jenkins to use EFS for shared workspace
-cat >> ${JENKINS_CONFIG} << EOF
-
-# HA Configuration
-JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true -Xmx2048m -Xms512m -Dhudson.model.DirectoryBrowserSupport.CSP= -Djenkins.install.runSetupWizard=false"
-EOF
+# Update Jenkins configuration (Ubuntu uses different format)
+if [ -f "$${JENKINS_CONFIG}" ]; then
+    sed -i "s|JENKINS_HOME=.*|JENKINS_HOME=$${JENKINS_HOME}|g" $${JENKINS_CONFIG}
+    
+    # Configure Jenkins to use EFS for shared workspace
+    if ! grep -q "JENKINS_JAVA_OPTIONS" $${JENKINS_CONFIG}; then
+        echo "" >> $${JENKINS_CONFIG}
+        echo "# HA Configuration" >> $${JENKINS_CONFIG}
+        echo "JENKINS_JAVA_OPTIONS=\"-Djava.awt.headless=true -Xmx2048m -Xms512m -Dhudson.model.DirectoryBrowserSupport.CSP= -Djenkins.install.runSetupWizard=false\"" >> $${JENKINS_CONFIG}
+    fi
+fi
 
 # Create Jenkins init script for HA setup
 cat > /opt/jenkins/init-scripts/ha-setup.sh << 'EOF'

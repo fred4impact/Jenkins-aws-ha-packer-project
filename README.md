@@ -59,7 +59,40 @@ ha-jenkins-aws/
 └── README.md                          # This file
 ```
 
-## Step-by-Step Deployment
+## GitLab CI/CD Pipeline
+
+This project includes a complete GitLab CI/CD pipeline that automates the entire deployment process:
+
+1. **Stage I: Checkout** - Clones repository and creates `jenkinsrole.tar`
+2. **Stage II: Terraform** - Initializes, validates, plans, and applies Terraform (creates EFS, builds AMI with Packer, deploys infrastructure)
+3. **Stage III: Trivy Scan** - Scans the built AMI for security vulnerabilities
+4. **Stage IV: Notify** - Sends pipeline summary
+
+### Quick Start with GitLab CI/CD
+
+1. **Configure GitLab CI/CD Variables** (Settings → CI/CD → Variables):
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - `AWS_DEFAULT_REGION`
+   - `TF_STATE_BUCKET`
+   - Other optional variables (see `GITLAB-CICD-SETUP.md`)
+
+2. **Push code to GitLab**:
+   ```bash
+   git remote add origin https://gitlab.com/your-username/jenkins-aws-ha-packer-project.git
+   git push -u origin main
+   ```
+
+3. **Run the pipeline**:
+   - Pipeline runs automatically on push
+   - `terraform_apply` requires manual approval for safety
+   - Download artifacts (AMI ID, security reports) after completion
+
+For detailed setup instructions, see **[GITLAB-CICD-SETUP.md](GITLAB-CICD-SETUP.md)**.
+
+---
+
+## Step-by-Step Deployment (Manual)
 
 ### Step 1: Build Jenkins AMI with Packer
 

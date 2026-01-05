@@ -1,0 +1,445 @@
+# GitLab CI/CD Pipeline for Jenkins HA Infrastructure
+# Three-stage process: Checkout → Terraform Apply (EFS + Packer AMI + Infrastructure) → Trivy Scan
+# This pipeline follows the integrated Terraform-Packer flow
+
+stages:
+  - checkout
+  - terraform
+  - scan
+  - notify
+
+variables:
+  TERRAFORM_VERSION: "1.6.0"
+  PACKER_VERSION: "1.10.0"
+  AWS_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+  JENKINS_VERSION: "${JENKINS_VERSION:-2.414.3}"
+  JAVA_VERSION: "${JAVA_VERSION:-17}"
+  TRIVY_SEVERITY: "${TRIVY_SEVERITY:-HIGH,CRITICAL}"
+  TRIVY_EXIT_CODE: "${TRIVY_EXIT_CODE:-0}"
+  TF_ROOT: "${CI_PROJECT_DIR}/terraform/main"
+  PACKER_ROOT: "${CI_PROJECT_DIR}/packer"
+  PLAYBOOKS_ROOT: "${CI_PROJECT_DIR}/playbooks"
+
+# ============================================
+# STAGE I: CHECKOUT
+# ============================================
+checkout_and_prepare:
+  stage: checkout
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache git tar
+  script:
+    - echo "=== STAGE I: CHECKOUT AND PREPARE ==="
+    - echo "Repository: $CI_PROJECT_URL"
+    - echo "Branch: $CI_COMMIT_REF_NAME"
+    - echo "Commit: $CI_COMMIT_SHA"
+    - |
+      echo "Verifying repository structure..."
+      ls -la
+      echo "Terraform directory:"
+      ls -la terraform/main/ || echo "Terraform directory not found"
+      echo "Packer directory:"
+      ls -la packer/ || echo "Packer directory not found"
+      echo "Playbooks directory:"
+      ls -la playbooks/ || echo "Playbooks directory not found"
+    - |
+      echo "Creating jenkinsrole.tar (as per flow requirements)..."
+      cd $PLAYBOOKS_ROOT
+      if [ -f jenkins-setup.yml ] && [ -d roles ]; then
+        tar -cvf jenkinsrole.tar \
+          jenkins-setup.yml \
+          roles \
+          ansible.cfg \
+          requirements.yml 2>/dev/null || true
+        echo "✅ jenkinsrole.tar created"
+        ls -lh jenkinsrole.tar
+      else
+        echo "⚠️ Warning: jenkins-setup.yml or roles directory not found"
+      fi
+    - echo "✅ Checkout and preparation completed"
+  artifacts:
+    paths:
+      - terraform/
+      - packer/
+      - playbooks/
+      - jenkins-config/
+    expire_in: 2 hours
+  only:
+    - triggers
+    - web
+
+# ============================================
+# STAGE II: TERRAFORM
+# ============================================
+
+# Terraform Init
+terraform_init:
+  stage: terraform
+  image: hashicorp/terraform:${TERRAFORM_VERSION}
+  dependencies:
+    - checkout_and_prepare
+  before_script:
+    - echo "=== TERRAFORM INIT ==="
+    - cd $TF_ROOT
+    - |
+      echo "Installing AWS CLI..."
+      apk add --no-cache python3 py3-pip curl unzip
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+    - |
+      echo "Configuring AWS credentials..."
+      mkdir -p ~/.aws
+      echo "[default]" > ~/.aws/credentials
+      echo "aws_access_key_id = ${AWS_ACCESS_KEY_ID}" >> ~/.aws/credentials
+      echo "aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
+      echo "[default]" > ~/.aws/config
+      echo "region = ${AWS_REGION}" >> ~/.aws/config
+      echo "output = json" >> ~/.aws/config
+    - |
+      echo "Verifying AWS connection..."
+      aws sts get-caller-identity
+  script:
+    - cd $TF_ROOT
+    - echo "Initializing Terraform..."
+    - terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -backend-config="key=${TF_STATE_KEY:-ha-jenkins/terraform.tfstate}" -backend-config="region=${TF_STATE_REGION:-us-east-1}"
+    - echo "✅ Terraform initialized successfully"
+  artifacts:
+    paths:
+      - terraform/main/.terraform/
+    expire_in: 1 hour
+  only:
+    - triggers
+    - web
+
+# Terraform Validate
+terraform_validate:
+  stage: terraform
+  image: hashicorp/terraform:${TERRAFORM_VERSION}
+  dependencies:
+    - terraform_init
+  before_script:
+    - echo "=== TERRAFORM VALIDATE ==="
+    - cd $TF_ROOT
+    - |
+      echo "Installing AWS CLI..."
+      apk add --no-cache python3 py3-pip curl unzip
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+    - |
+      echo "Configuring AWS credentials..."
+      mkdir -p ~/.aws
+      echo "[default]" > ~/.aws/credentials
+      echo "aws_access_key_id = ${AWS_ACCESS_KEY_ID}" >> ~/.aws/credentials
+      echo "aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
+      echo "[default]" > ~/.aws/config
+      echo "region = ${AWS_REGION}" >> ~/.aws/config
+  script:
+    - cd $TF_ROOT
+    - echo "Validating Terraform configuration..."
+    - terraform validate
+    - echo "✅ Terraform validation passed"
+  only:
+    - triggers
+    - web
+
+# Terraform Plan
+terraform_plan:
+  stage: terraform
+  image: hashicorp/terraform:${TERRAFORM_VERSION}
+  dependencies:
+    - terraform_validate
+  before_script:
+    - echo "=== TERRAFORM PLAN ==="
+    - cd $TF_ROOT
+    - |
+      echo "Installing AWS CLI and dependencies..."
+      apk add --no-cache python3 py3-pip curl unzip jq
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+    - |
+      echo "Installing Packer for validation..."
+      wget https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip
+      unzip packer_${PACKER_VERSION}_linux_amd64.zip
+      mv packer /usr/local/bin/
+      chmod +x /usr/local/bin/packer
+      packer version
+    - |
+      echo "Installing Ansible..."
+      pip3 install --upgrade pip
+      pip3 install ansible
+      ansible --version
+    - |
+      echo "Configuring AWS credentials..."
+      mkdir -p ~/.aws
+      echo "[default]" > ~/.aws/credentials
+      echo "aws_access_key_id = ${AWS_ACCESS_KEY_ID}" >> ~/.aws/credentials
+      echo "aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
+      echo "[default]" > ~/.aws/config
+      echo "region = ${AWS_REGION}" >> ~/.aws/config
+    - |
+      echo "Preparing Packer environment..."
+      cd $PACKER_ROOT
+      if [ ! -f jenkinsrole.tar ] || [ ! -s jenkinsrole.tar ]; then
+        echo "Creating jenkinsrole.tar..."
+        cd $PLAYBOOKS_ROOT
+        tar -cvf jenkinsrole.tar \
+          jenkins-setup.yml \
+          roles \
+          ansible.cfg \
+          requirements.yml 2>/dev/null || true
+        mv jenkinsrole.tar $PACKER_ROOT/ || true
+      fi
+      cd $TF_ROOT
+  script:
+    - cd $TF_ROOT
+    - |
+      echo "Creating terraform plan..."
+      terraform plan \
+        -var-file="${TF_VARS_FILE:-dev.tfvars}" \
+        -var "aws_access_key=${AWS_ACCESS_KEY_ID}" \
+        -var "aws_secret_key=${AWS_SECRET_ACCESS_KEY}" \
+        -var "jenkins_version=${JENKINS_VERSION}" \
+        -var "java_version=${JAVA_VERSION}" \
+        -out=tfplan
+    - echo "✅ Terraform plan created successfully"
+  artifacts:
+    paths:
+      - terraform/main/tfplan
+    expire_in: 1 week
+  only:
+    - triggers
+    - web
+
+# Terraform Apply (Creates EFS, Builds AMI with Packer, Deploys Infrastructure)
+terraform_apply:
+  stage: terraform
+  image: hashicorp/terraform:${TERRAFORM_VERSION}
+  dependencies:
+    - terraform_plan
+  before_script:
+    - echo "=== TERRAFORM APPLY ==="
+    - echo "This stage will:"
+    - echo "  1. Create EFS"
+    - echo "  2. Call Packer with EFS ID to build AMI"
+    - echo "  3. Deploy infrastructure (VPC, ASG, ELB, etc.)"
+    - cd $TF_ROOT
+    - |
+      echo "Installing dependencies..."
+      apk add --no-cache python3 py3-pip curl unzip jq git
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+    - |
+      echo "Installing Packer..."
+      wget https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip
+      unzip packer_${PACKER_VERSION}_linux_amd64.zip
+      mv packer /usr/local/bin/
+      chmod +x /usr/local/bin/packer
+      packer version
+    - |
+      echo "Installing Ansible..."
+      pip3 install --upgrade pip
+      pip3 install ansible
+      ansible --version
+    - |
+      echo "Configuring AWS credentials..."
+      mkdir -p ~/.aws
+      echo "[default]" > ~/.aws/credentials
+      echo "aws_access_key_id = ${AWS_ACCESS_KEY_ID}" >> ~/.aws/credentials
+      echo "aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
+      echo "[default]" > ~/.aws/config
+      echo "region = ${AWS_REGION}" >> ~/.aws/config
+    - |
+      echo "Preparing Packer environment..."
+      cd $PACKER_ROOT
+      if [ ! -f jenkinsrole.tar ] || [ ! -s jenkinsrole.tar ]; then
+        echo "Creating jenkinsrole.tar..."
+        cd $PLAYBOOKS_ROOT
+        tar -cvf jenkinsrole.tar \
+          jenkins-setup.yml \
+          roles \
+          ansible.cfg \
+          requirements.yml 2>/dev/null || true
+        mv jenkinsrole.tar $PACKER_ROOT/ || true
+      fi
+      cd $TF_ROOT
+  script:
+    - cd $TF_ROOT
+    - |
+      echo "Applying Terraform configuration..."
+      terraform apply \
+        -var-file="${TF_VARS_FILE:-dev.tfvars}" \
+        -var "aws_access_key=${AWS_ACCESS_KEY_ID}" \
+        -var "aws_secret_key=${AWS_SECRET_ACCESS_KEY}" \
+        -var "jenkins_version=${JENKINS_VERSION}" \
+        -var "java_version=${JAVA_VERSION}" \
+        -auto-approve
+    - |
+      echo "Extracting AMI ID from Terraform output..."
+      AMI_ID=$(terraform output -raw packer_built_ami_id 2>/dev/null || echo "")
+      if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "null" ] || [ "$AMI_ID" = "" ]; then
+        echo "Trying to extract from Packer manifest..."
+        if [ -f $PACKER_ROOT/manifest.json ]; then
+          AMI_ID=$(jq -r '.builds[0].artifact_id' $PACKER_ROOT/manifest.json | cut -d':' -f2 || echo "")
+        fi
+      fi
+      if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "null" ] && [ "$AMI_ID" != "" ]; then
+        echo "AMI_ID=${AMI_ID}" > ami-id.txt
+        echo "✅ AMI built successfully: ${AMI_ID}"
+      else
+        echo "⚠️ Warning: Could not extract AMI ID"
+        echo "AMI_ID=" > ami-id.txt
+      fi
+    - |
+      echo "Extracting other outputs..."
+      terraform output -json > terraform-outputs.json 2>/dev/null || echo "{}" > terraform-outputs.json
+    - echo "✅ Terraform apply completed"
+  artifacts:
+    paths:
+      - terraform/main/ami-id.txt
+      - terraform/main/terraform-outputs.json
+      - packer/manifest.json
+      - packer/packer-build.log
+    expire_in: 1 week
+    reports:
+      dotenv: terraform/main/ami-id.txt
+  only:
+    - triggers
+    - web
+  when: manual
+  environment:
+    name: ${CI_COMMIT_REF_NAME}
+    action: start
+
+# ============================================
+# STAGE III: TRIVY SCAN
+# ============================================
+scan_ami:
+  stage: scan
+  image: 
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  dependencies:
+    - terraform_apply
+  before_script:
+    - echo "=== STAGE III: TRIVY SCAN ==="
+    - |
+      echo "Installing AWS CLI..."
+      apk add --no-cache curl unzip jq
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      ./aws/install
+      rm -rf aws awscliv2.zip
+    - |
+      echo "Configuring AWS credentials..."
+      mkdir -p ~/.aws
+      echo "[default]" > ~/.aws/credentials
+      echo "aws_access_key_id = ${AWS_ACCESS_KEY_ID}" >> ~/.aws/credentials
+      echo "aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
+      echo "[default]" > ~/.aws/config
+      echo "region = ${AWS_REGION}" >> ~/.aws/config
+    - |
+      echo "Reading AMI ID from previous stage..."
+      if [ -f terraform/main/ami-id.txt ]; then
+        source terraform/main/ami-id.txt
+        echo "AMI ID: ${AMI_ID}"
+      else
+        echo "❌ Error: ami-id.txt not found"
+        exit 1
+      fi
+    - |
+      if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "" ]; then
+        echo "❌ Error: AMI_ID is empty"
+        exit 1
+      fi
+      echo "Verifying AMI exists in AWS..."
+      aws ec2 describe-images \
+        --image-ids ${AMI_ID} \
+        --region ${AWS_REGION} \
+        --query 'Images[0].[ImageId,Name,State]' \
+        --output table
+  script:
+    - |
+      echo "Scanning AMI with Trivy..."
+      echo "AMI ID: ${AMI_ID}"
+      echo "Severity: ${TRIVY_SEVERITY}"
+      echo "Exit Code: ${TRIVY_EXIT_CODE}"
+    - |
+      trivy image \
+        --exit-code ${TRIVY_EXIT_CODE} \
+        --severity ${TRIVY_SEVERITY} \
+        --format table \
+        --output trivy-report.txt \
+        ${AMI_ID}
+    - |
+      echo "Generating JSON report..."
+      trivy image \
+        --exit-code ${TRIVY_EXIT_CODE} \
+        --severity ${TRIVY_SEVERITY} \
+        --format json \
+        --output trivy-report.json \
+        ${AMI_ID}
+    - |
+      echo "Generating HTML report..."
+      trivy image \
+        --exit-code ${TRIVY_EXIT_CODE} \
+        --severity ${TRIVY_SEVERITY} \
+        --format template \
+        --template '@contrib/html.tpl' \
+        --output trivy-report.html \
+        ${AMI_ID}
+    - |
+      echo "✅ Trivy scan completed"
+      echo "Summary:"
+      cat trivy-report.txt | head -30
+  artifacts:
+    paths:
+      - trivy-report.txt
+      - trivy-report.json
+      - trivy-report.html
+      - terraform/main/ami-id.txt
+    reports:
+      sast: trivy-report.json
+    expire_in: 30 days
+  only:
+    - triggers
+    - web
+  when: on_success
+  allow_failure: false
+
+# ============================================
+# STAGE IV: NOTIFICATION
+# ============================================
+notify:
+  stage: notify
+  image: curlimages/curl:latest
+  dependencies:
+    - terraform_apply
+    - scan_ami
+  script:
+    - |
+      echo "=== PIPELINE SUMMARY ==="
+      if [ -f terraform/main/ami-id.txt ]; then
+        source terraform/main/ami-id.txt
+        echo "✅ AMI Built: ${AMI_ID}"
+        echo "🔗 View in AWS: https://console.aws.amazon.com/ec2/v2/home?region=${AWS_REGION}#Images:imageId=${AMI_ID}"
+      fi
+      if [ -f terraform/main/terraform-outputs.json ]; then
+        echo "📊 Terraform Outputs:"
+        cat terraform/main/terraform-outputs.json | head -20
+      fi
+      echo "📊 Pipeline: $CI_PIPELINE_URL"
+      echo "🔍 Jobs: $CI_PROJECT_URL/-/pipelines/$CI_PIPELINE_ID"
+      echo "✅ Pipeline completed successfully"
+  only:
+    - triggers
+    - web
+  when: on_success
+

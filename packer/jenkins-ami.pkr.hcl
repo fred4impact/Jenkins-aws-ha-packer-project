@@ -21,14 +21,14 @@ source "amazon-ebs" "jenkins" {
   region        = var.aws_region
   source_ami_filter {
     filters = {
-      name                = "amzn2-ami-hvm-*-x86_64-gp2"
+      name                = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
       root-device-type    = "ebs"
       virtualization-type = "hvm"
     }
     most_recent = true
-    owners      = ["amazon"]
+    owners      = ["099720109477"]  # Canonical (Ubuntu)
   }
-  ssh_username = "ec2-user"
+  ssh_username = "ubuntu"
   tags = {
     Name        = "Jenkins HA AMI"
     Environment = "Production"
@@ -38,18 +38,47 @@ source "amazon-ebs" "jenkins" {
 }
 
 build {
-  name = "BILARN-JENKINS-AMI"
+  name = "jenkins-ha-ami"
   sources = [
     "source.amazon-ebs.jenkins"
   ]
 
+  # Copy Jenkins configuration files
   provisioner "file" {
     source      = "../jenkins-config/"
     destination = "/tmp/jenkins-config"
   }
 
+  # Copy jenkinsrole.tar (as shown in images - contains Ansible playbooks and roles)
+  provisioner "file" {
+    source      = "jenkinsrole.tar"
+    destination = "/home/ubuntu/jenkinsrole.tar"
+    only        = ["amazon-ebs.jenkins"]
+  }
+
+  # Copy setup.sh if it exists (as shown in images)
+  provisioner "file" {
+    source      = "scripts/setup.sh"
+    destination = "/home/ubuntu/setup.sh"
+    only        = ["amazon-ebs.jenkins"]
+    on_error    = "continue"  # Continue if setup.sh doesn't exist
+  }
+
+  # Install Jenkins and base software
   provisioner "shell" {
     script = "scripts/install-jenkins.sh"
+  }
+
+  # Extract jenkinsrole.tar and run setup.sh with EFS ID (as shown in images)
+  provisioner "shell" {
+    inline = [
+      "cd /home/ubuntu",
+      "if [ -f jenkinsrole.tar ]; then tar -xvf jenkinsrole.tar; fi",
+      # Store EFS ID for later use (during instance launch)
+      "if [ -n '${var.efs_id}' ]; then echo 'EFS_ID=${var.efs_id}' | sudo tee /opt/jenkins/efs-id.txt; fi",
+      # Run setup.sh with EFS ID if it exists
+      "if [ -f setup.sh ]; then chmod +x setup.sh && ./setup.sh '${var.efs_id}'; fi"
+    ]
   }
 
   # Ansible provisioner - Temporarily disabled to allow AMI build to complete
@@ -57,7 +86,7 @@ build {
   # Uncomment below to enable Ansible configuration during AMI build
   # provisioner "ansible" {
   #   playbook_file = "../playbooks/jenkins-setup.yml"
-  #   user          = "ec2-user"
+  #   user          = "ubuntu"
   #   extra_arguments = [
   #     "--extra-vars", "jenkins_version=${var.jenkins_version}",
   #     "--extra-vars", "java_version=${var.java_version}",
@@ -73,7 +102,7 @@ build {
   provisioner "shell" {
     inline = [
       "sudo systemctl enable jenkins",
-      "sudo systemctl enable amazon-ssm-agent",
+      "sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service || sudo systemctl enable amazon-ssm-agent",
       "sudo systemctl enable docker",
       "sudo usermod -aG docker jenkins",
       "sudo mkdir -p /opt/jenkins",
