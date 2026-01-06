@@ -14,9 +14,8 @@ packer {
 locals {
   # Format: YYYYMMDD
   build_date = formatdate("YYYYMMDD", timestamp())
-  # Format: HHMMSS
-  build_time = formatdate("HHMMSS", timestamp())
-  # Full timestamp for unique naming
+  # Full timestamp for unique naming (removes dashes, spaces, colons, and timezone)
+  # Format: YYYYMMDDHHmmss
   timestamp = regex_replace(timestamp(), "[- TZ:]", "")
   # AMI name format: Jenkins-bilarn-HA-AMI-YYYYMMDD-BUILD-NUMBER
   ami_name_base = "Jenkins-bilarn-HA-AMI-${local.build_date}"
@@ -44,7 +43,6 @@ source "amazon-ebs" "jenkins" {
     ManagedBy   = "Packer"
     Application = "Jenkins"
     BuildDate   = local.build_date
-    BuildTime   = local.build_time
     BuildNumber = var.build_number != "" ? var.build_number : local.timestamp
   }
 }
