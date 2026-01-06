@@ -330,11 +330,30 @@ jobs:
           TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
         run: |
           echo "=== Scanning AMI with Trivy ==="
+          
+          # Validate AMI ID is set
+          if [ -z "${AMI_ID}" ]; then
+            echo "❌ Error: AMI_ID is not set"
+            exit 1
+          fi
+          
           echo "AMI ID: ${AMI_ID}"
-          echo "Severity: ${TRIVY_SEVERITY}"
-          echo "Exit Code: ${TRIVY_EXIT_CODE}"
+          echo "Severity: ${TRIVY_SEVERITY:-HIGH,CRITICAL}"
+          echo "Exit Code: ${TRIVY_EXIT_CODE:-1}"
+          
+          # Set default values if not provided
+          TRIVY_EXIT_CODE="${TRIVY_EXIT_CODE:-1}"
+          TRIVY_SEVERITY="${TRIVY_SEVERITY:-HIGH,CRITICAL}"
+          
+          # Verify AMI ID format
+          if [[ ! "${AMI_ID}" =~ ^ami- ]]; then
+            echo "❌ Error: Invalid AMI ID format: ${AMI_ID}"
+            exit 1
+          fi
           
           # Generate table format report
+          # Note: Trivy scans AWS AMIs using the AMI ID directly
+          set +e  # Don't exit on error, we'll handle it
           docker run --rm \
             -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
             -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
@@ -344,22 +363,37 @@ jobs:
             aquasec/trivy:${{ env.TRIVY_VERSION }} \
             image \
             --exit-code ${TRIVY_EXIT_CODE} \
-            --severity ${TRIVY_SEVERITY} \
+            --severity "${TRIVY_SEVERITY}" \
             --format table \
             --output trivy-report.txt \
-            ${AMI_ID} || SCAN_FAILED=true
+            "${AMI_ID}" 2>&1 | tee trivy-scan.log || SCAN_FAILED=true
+          set -e  # Re-enable exit on error
           
+          # Check if scan actually ran (not just command error)
           if [ "${SCAN_FAILED}" = "true" ]; then
-            echo "scan_passed=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Trivy scan found vulnerabilities"
+            # Check if it's a vulnerability issue or command error
+            if [ -f trivy-report.txt ] && [ -s trivy-report.txt ]; then
+              echo "scan_passed=false" >> $GITHUB_OUTPUT
+              echo "⚠️ Trivy scan found vulnerabilities"
+            else
+              echo "❌ Trivy scan command failed"
+              echo "=== Trivy Error Log ==="
+              cat trivy-scan.log || true
+              echo "======================"
+              exit 1
+            fi
           else
             echo "scan_passed=true" >> $GITHUB_OUTPUT
             echo "✅ Trivy scan passed"
           fi
 
       - name: Generate JSON report
+        env:
+          TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
         run: |
           echo "=== Generating JSON Report ==="
+          TRIVY_SEVERITY="${TRIVY_SEVERITY:-HIGH,CRITICAL}"
+          
           docker run --rm \
             -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
             -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
@@ -369,14 +403,18 @@ jobs:
             aquasec/trivy:${{ env.TRIVY_VERSION }} \
             image \
             --exit-code 0 \
-            --severity ${TRIVY_SEVERITY} \
+            --severity "${TRIVY_SEVERITY}" \
             --format json \
             --output trivy-report.json \
-            ${AMI_ID}
+            "${AMI_ID}"
 
       - name: Generate HTML report
+        env:
+          TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
         run: |
           echo "=== Generating HTML Report ==="
+          TRIVY_SEVERITY="${TRIVY_SEVERITY:-HIGH,CRITICAL}"
+          
           docker run --rm \
             -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
             -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
@@ -386,11 +424,11 @@ jobs:
             aquasec/trivy:${{ env.TRIVY_VERSION }} \
             image \
             --exit-code 0 \
-            --severity ${TRIVY_SEVERITY} \
+            --severity "${TRIVY_SEVERITY}" \
             --format template \
             --template '@contrib/html.tpl' \
             --output trivy-report.html \
-            ${AMI_ID}
+            "${AMI_ID}"
 
       - name: Display scan summary
         run: |
