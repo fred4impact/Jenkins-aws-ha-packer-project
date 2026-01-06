@@ -22,3 +22,5 @@ aws ec2 describe-images \
   --query 'Images[0].[ImageId,Name,State]' \
   --output table
 
+
+

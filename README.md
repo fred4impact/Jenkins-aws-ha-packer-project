@@ -1,6 +1,6 @@
 # High Availability Jenkins on AWS
 
-This project provisions a highly available Jenkins CI/CD platform on AWS using Terraform for infrastructure as code and HashiCorp Packer for building organization-specific Jenkins AMIs.
+This project provisions a highly available Github-Actions/Jenkins CI/CD platform on AWS using Terraform for infrastructure as code and HashiCorp Packer for building organization-specific Jenkins AMIs.
 
 ## Architecture Overview
 

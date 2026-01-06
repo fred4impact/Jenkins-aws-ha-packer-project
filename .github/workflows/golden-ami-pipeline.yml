@@ -1,0 +1,598 @@
+name: Golden AMI Build and Deploy Pipeline
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+    paths:
+      - 'packer/**'
+      - 'playbooks/**'
+      - 'terraform/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      build_ami:
+        description: 'Build new AMI'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      deploy_infrastructure:
+        description: 'Deploy Infrastructure'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - 'dev'
+          - 'staging'
+          - 'prod'
+
+env:
+  AWS_REGION: us-east-1
+  PACKER_VERSION: 1.10.0
+  TERRAFORM_VERSION: 1.6.0
+  TRIVY_VERSION: latest
+  ANSIBLE_VERSION: latest
+
+jobs:
+  # ============================================
+  # STAGE I: CHECKOUT
+  # ============================================
+  checkout:
+    name: Stage I - Checkout Playbook and Code
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.set-timestamp.outputs.timestamp }}
+      build_id: ${{ steps.set-timestamp.outputs.build_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: repository
+
+      - name: Set build metadata
+        id: set-timestamp
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          BUILD_ID="build-${TIMESTAMP}"
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "build_id=${BUILD_ID}" >> $GITHUB_OUTPUT
+          echo "✅ Build ID: ${BUILD_ID}"
+
+      - name: Verify playbook structure
+        run: |
+          echo "=== Verifying Playbook Structure ==="
+          ls -la repository/playbooks/ || echo "⚠️ Playbooks directory not found"
+          ls -la repository/packer/ || echo "⚠️ Packer directory not found"
+          echo "✅ Checkout completed"
+
+      - name: Upload repository as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository
+          path: repository
+          retention-days: 7
+
+  # ============================================
+  # STAGE II: BUILD AMI WITH PACKER
+  # ============================================
+  build_ami:
+    name: Stage II - Build Golden AMI with Packer
+    runs-on: ubuntu-latest
+    needs: checkout
+    if: github.event.inputs.build_ami != 'false'
+    outputs:
+      ami_id: ${{ steps.extract-ami-id.outputs.ami_id }}
+      ami_name: ${{ steps.extract-ami-id.outputs.ami_name }}
+    steps:
+      - name: Download repository artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: repository
+          path: .
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install ansible
+
+      - name: Verify tools installation
+        run: |
+          echo "=== Verifying Tools ==="
+          packer version
+          ansible --version
+          aws --version
+
+      - name: Initialize Packer plugins
+        working-directory: ./packer
+        run: |
+          echo "=== Initializing Packer Plugins ==="
+          packer init .
+
+      - name: Validate Packer configuration
+        working-directory: ./packer
+        run: |
+          echo "=== Validating Packer Configuration ==="
+          packer validate jenkins-ami.pkr.hcl || exit 1
+          echo "✅ Packer configuration is valid"
+
+      - name: Build Golden AMI with Packer
+        id: build-ami
+        working-directory: ./packer
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          PACKER_LOG: 1
+          PACKER_LOG_PATH: packer.log
+        run: |
+          echo "=== Building Golden AMI ==="
+          echo "Base AMI: Ubuntu 22.04"
+          echo "Provisioner: Ansible"
+          echo "Components: Jenkins, Java, Ubuntu, playbook"
+          
+          packer build \
+            -var "aws_region=${{ env.AWS_REGION }}" \
+            -var "jenkins_version=${{ vars.JENKINS_VERSION || '2.414.3' }}" \
+            -var "java_version=${{ vars.JAVA_VERSION || '17' }}" \
+            jenkins-ami.pkr.hcl
+          
+          echo "✅ AMI build completed"
+
+      - name: Extract AMI ID from manifest
+        id: extract-ami-id
+        working-directory: ./packer
+        run: |
+          echo "=== Extracting AMI ID ==="
+          if [ -f manifest.json ]; then
+            AMI_ID=$(jq -r '.builds[0].artifact_id' manifest.json | cut -d':' -f2)
+            AMI_NAME=$(jq -r '.builds[0].artifact_id' manifest.json | cut -d':' -f1)
+            echo "ami_id=${AMI_ID}" >> $GITHUB_OUTPUT
+            echo "ami_name=${AMI_NAME}" >> $GITHUB_OUTPUT
+            echo "✅ AMI ID: ${AMI_ID}"
+            echo "✅ AMI Name: ${AMI_NAME}"
+          else
+            echo "❌ Error: manifest.json not found"
+            exit 1
+          fi
+
+      - name: Verify AMI exists in AWS
+        run: |
+          echo "=== Verifying AMI in AWS ==="
+          aws ec2 describe-images \
+            --image-ids ${{ steps.extract-ami-id.outputs.ami_id }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Images[0].[ImageId,Name,State,CreationDate]' \
+            --output table
+
+      - name: Save AMI ID to file
+        run: |
+          echo "AMI_ID=${{ steps.extract-ami-id.outputs.ami_id }}" > ami-id.txt
+          echo "AMI_NAME=${{ steps.extract-ami-id.outputs.ami_name }}" >> ami-id.txt
+          cat ami-id.txt
+
+      - name: Upload AMI metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ami-metadata
+          path: |
+            ami-id.txt
+            packer/manifest.json
+            packer/packer.log
+          retention-days: 30
+
+      - name: Tag AMI with build information
+        run: |
+          echo "=== Tagging AMI ==="
+          aws ec2 create-tags \
+            --resources ${{ steps.extract-ami-id.outputs.ami_id }} \
+            --tags \
+              Key=BuildID,Value=${{ needs.checkout.outputs.build_id }} \
+              Key=BuildDate,Value=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+              Key=GitHubRunID,Value=${{ github.run_id }} \
+              Key=GitHubSHA,Value=${{ github.sha }} \
+              Key=GitHubRef,Value=${{ github.ref }} \
+            --region ${{ env.AWS_REGION }}
+
+  # ============================================
+  # STAGE III: SCAN AMI WITH TRIVY
+  # ============================================
+  scan_ami:
+    name: Stage III - Scan Golden AMI with Trivy
+    runs-on: ubuntu-latest
+    needs: [checkout, build_ami]
+    if: github.event.inputs.build_ami != 'false'
+    outputs:
+      scan_passed: ${{ steps.scan-ami.outputs.scan_passed }}
+    steps:
+      - name: Download AMI metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: ami-metadata
+          path: .
+
+      - name: Read AMI ID
+        id: read-ami-id
+        run: |
+          if [ -f ami-id.txt ]; then
+            source ami-id.txt
+            echo "AMI_ID=${AMI_ID}" >> $GITHUB_ENV
+            echo "✅ AMI ID: ${AMI_ID}"
+          else
+            echo "❌ Error: ami-id.txt not found"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials for Trivy
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AMI exists before scanning
+        run: |
+          echo "=== Verifying AMI exists ==="
+          aws ec2 describe-images \
+            --image-ids ${AMI_ID} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Images[0].[ImageId,Name,State]' \
+            --output table
+
+      - name: Scan AMI with Trivy
+        id: scan-ami
+        env:
+          TRIVY_EXIT_CODE: ${{ vars.TRIVY_EXIT_CODE || '1' }}
+          TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
+        run: |
+          echo "=== Scanning AMI with Trivy ==="
+          echo "AMI ID: ${AMI_ID}"
+          echo "Severity: ${TRIVY_SEVERITY}"
+          echo "Exit Code: ${TRIVY_EXIT_CODE}"
+          
+          # Generate table format report
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            -e AWS_DEFAULT_REGION=${{ env.AWS_REGION }} \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            aquasec/trivy:${{ env.TRIVY_VERSION }} \
+            image \
+            --exit-code ${TRIVY_EXIT_CODE} \
+            --severity ${TRIVY_SEVERITY} \
+            --format table \
+            --output trivy-report.txt \
+            ${AMI_ID} || SCAN_FAILED=true
+          
+          if [ "${SCAN_FAILED}" = "true" ]; then
+            echo "scan_passed=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Trivy scan found vulnerabilities"
+          else
+            echo "scan_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Trivy scan passed"
+          fi
+
+      - name: Generate JSON report
+        run: |
+          echo "=== Generating JSON Report ==="
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            -e AWS_DEFAULT_REGION=${{ env.AWS_REGION }} \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            aquasec/trivy:${{ env.TRIVY_VERSION }} \
+            image \
+            --exit-code 0 \
+            --severity ${TRIVY_SEVERITY} \
+            --format json \
+            --output trivy-report.json \
+            ${AMI_ID}
+
+      - name: Generate HTML report
+        run: |
+          echo "=== Generating HTML Report ==="
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            -e AWS_DEFAULT_REGION=${{ env.AWS_REGION }} \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            aquasec/trivy:${{ env.TRIVY_VERSION }} \
+            image \
+            --exit-code 0 \
+            --severity ${TRIVY_SEVERITY} \
+            --format template \
+            --template '@contrib/html.tpl' \
+            --output trivy-report.html \
+            ${AMI_ID}
+
+      - name: Display scan summary
+        run: |
+          echo "=== Trivy Scan Summary ==="
+          if [ -f trivy-report.txt ]; then
+            head -30 trivy-report.txt
+          fi
+
+      - name: Upload Trivy reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: |
+            trivy-report.txt
+            trivy-report.json
+            trivy-report.html
+            ami-id.txt
+          retention-days: 30
+
+      - name: Upload Trivy report to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-report.json
+          category: trivy-ami-scan
+        continue-on-error: true
+
+      - name: Fail if scan failed
+        if: steps.scan-ami.outputs.scan_passed == 'false'
+        run: |
+          echo "❌ Trivy scan failed with critical vulnerabilities"
+          echo "Please review the trivy-report.html for details"
+          exit 1
+
+  # ============================================
+  # STAGE IV: DEPLOY INFRASTRUCTURE WITH TERRAFORM
+  # ============================================
+  deploy_infrastructure:
+    name: Stage IV - Deploy Infrastructure with Terraform
+    runs-on: ubuntu-latest
+    needs: [checkout, build_ami, scan_ami]
+    if: |
+      github.event.inputs.deploy_infrastructure == 'true' &&
+      needs.scan_ami.outputs.scan_passed == 'true'
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+    outputs:
+      alb_dns: ${{ steps.terraform-output.outputs.alb_dns }}
+      efs_id: ${{ steps.terraform-output.outputs.efs_id }}
+    steps:
+      - name: Download repository artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: repository
+          path: .
+
+      - name: Download AMI metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: ami-metadata
+          path: .
+
+      - name: Read AMI ID
+        id: read-ami-id
+        run: |
+          if [ -f ami-id.txt ]; then
+            source ami-id.txt
+            echo "AMI_ID=${AMI_ID}" >> $GITHUB_ENV
+            echo "✅ Using AMI ID: ${AMI_ID}"
+          else
+            echo "❌ Error: ami-id.txt not found"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ./terraform/main
+        run: |
+          echo "=== Initializing Terraform ==="
+          terraform init
+
+      - name: Terraform Validate
+        working-directory: ./terraform/main
+        run: |
+          echo "=== Validating Terraform Configuration ==="
+          terraform validate
+
+      - name: Terraform Plan
+        working-directory: ./terraform/main
+        env:
+          TF_VAR_jenkins_ami_id: ${{ env.AMI_ID }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+        run: |
+          echo "=== Creating Terraform Plan ==="
+          terraform plan \
+            -var="jenkins_ami_id=${AMI_ID}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="environment=${{ github.event.inputs.environment || 'dev' }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ./terraform/main
+        env:
+          TF_VAR_jenkins_ami_id: ${{ env.AMI_ID }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+        run: |
+          echo "=== Deploying Infrastructure ==="
+          echo "Creating:"
+          echo "  - VPC, Subnets, IGW, NAT Gateways"
+          echo "  - EFS File System"
+          echo "  - Application Load Balancer"
+          echo "  - Auto Scaling Group"
+          echo "  - Launch Template (using Golden AMI)"
+          
+          terraform apply -auto-approve tfplan
+          echo "✅ Infrastructure deployed successfully"
+
+      - name: Get Terraform outputs
+        id: terraform-output
+        working-directory: ./terraform/main
+        run: |
+          echo "=== Extracting Terraform Outputs ==="
+          ALB_DNS=$(terraform output -raw alb_dns_name 2>/dev/null || echo "")
+          EFS_ID=$(terraform output -raw efs_id 2>/dev/null || echo "")
+          echo "alb_dns=${ALB_DNS}" >> $GITHUB_OUTPUT
+          echo "efs_id=${EFS_ID}" >> $GITHUB_OUTPUT
+          echo "✅ ALB DNS: ${ALB_DNS}"
+          echo "✅ EFS ID: ${EFS_ID}"
+
+      - name: Upload Terraform state (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state
+          path: terraform/main/*.tfstate
+          retention-days: 90
+        continue-on-error: true
+
+  # ============================================
+  # STAGE V: POST-DEPLOYMENT CONFIGURATION
+  # ============================================
+  post_deployment:
+    name: Stage V - Post-Deployment Configuration
+    runs-on: ubuntu-latest
+    needs: [checkout, deploy_infrastructure]
+    if: |
+      github.event.inputs.deploy_infrastructure == 'true' &&
+      needs.deploy_infrastructure.result == 'success'
+    steps:
+      - name: Download repository artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: repository
+          path: .
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for instances to be ready
+        run: |
+          echo "=== Waiting for Jenkins instances to be ready ==="
+          ALB_DNS="${{ needs.deploy_infrastructure.outputs.alb_dns }}"
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            if curl -f -s "http://${ALB_DNS}/login" > /dev/null 2>&1; then
+              echo "✅ Jenkins is ready!"
+              break
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt ${ATTEMPT}/${MAX_ATTEMPTS}: Waiting for Jenkins..."
+            sleep 10
+          done
+          
+          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+            echo "⚠️ Jenkins did not become ready in time"
+            exit 1
+          fi
+
+      - name: Run post-deployment scripts
+        run: |
+          echo "=== Running Post-Deployment Scripts ==="
+          if [ -d "scripts" ]; then
+            echo "✅ Post-deployment scripts directory found"
+            # Add your post-deployment script execution here
+            # Example: ./scripts/post-deployment.sh
+          else
+            echo "⚠️ No post-deployment scripts found"
+          fi
+
+      - name: Verify deployment
+        run: |
+          echo "=== Verifying Deployment ==="
+          ALB_DNS="${{ needs.deploy_infrastructure.outputs.alb_dns }}"
+          EFS_ID="${{ needs.deploy_infrastructure.outputs.efs_id }}"
+          
+          echo "✅ ALB DNS: ${ALB_DNS}"
+          echo "✅ EFS ID: ${EFS_ID}"
+          echo "✅ Jenkins URL: http://${ALB_DNS}"
+          echo ""
+          echo "=== Deployment Summary ==="
+          echo "Infrastructure deployed successfully!"
+          echo "Jenkins is accessible at: http://${ALB_DNS}"
+
+  # ============================================
+  # NOTIFICATION JOB
+  # ============================================
+  notify:
+    name: Pipeline Summary and Notification
+    runs-on: ubuntu-latest
+    needs: [checkout, build_ami, scan_ami, deploy_infrastructure, post_deployment]
+    if: always()
+    steps:
+      - name: Download AMI metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: ami-metadata
+          path: .
+        continue-on-error: true
+
+      - name: Pipeline Summary
+        run: |
+          echo "=== Pipeline Summary ==="
+          echo "Build ID: ${{ needs.checkout.outputs.build_id }}"
+          echo "GitHub Run ID: ${{ github.run_id }}"
+          echo "GitHub SHA: ${{ github.sha }}"
+          echo "GitHub Ref: ${{ github.ref }}"
+          echo ""
+          
+          if [ -f ami-id.txt ]; then
+            source ami-id.txt
+            echo "✅ AMI Built: ${AMI_ID}"
+            echo "🔗 View in AWS: https://console.aws.amazon.com/ec2/v2/home?region=${{ env.AWS_REGION }}#Images:imageId=${AMI_ID}"
+          fi
+          
+          echo "📊 Pipeline: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          if [ "${{ needs.deploy_infrastructure.result }}" == "success" ]; then
+            echo "✅ Infrastructure deployed successfully"
+            echo "🌐 Jenkins URL: http://${{ needs.deploy_infrastructure.outputs.alb_dns }}"
+          fi
+

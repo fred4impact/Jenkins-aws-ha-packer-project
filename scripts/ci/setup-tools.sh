@@ -30,3 +30,5 @@ echo "aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}" >> ~/.aws/credentials
 echo "[default]" > ~/.aws/config
 echo "region = ${AWS_REGION}" >> ~/.aws/config
 
+
+
