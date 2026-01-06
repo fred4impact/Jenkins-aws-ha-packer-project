@@ -36,3 +36,9 @@ variable "aws_secret_key" {
   sensitive   = true
 }
 
+variable "build_number" {
+  type        = string
+  description = "Build number or identifier for AMI naming (e.g., from CI/CD pipeline)"
+  default     = ""
+}
+

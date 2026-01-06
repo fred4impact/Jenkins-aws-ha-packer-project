@@ -1,14 +1,52 @@
 #!/bin/bash
+# Use set -e but allow certain commands to fail
 set -e
 
-# Update system
-sudo apt-get update -y
-sudo apt-get upgrade -y
+# Clean up any corrupted apt cache
+echo "Cleaning apt cache..."
+sudo rm -rf /var/lib/apt/lists/*
+sudo apt-get clean
+
+# Update system with retry logic
+echo "Updating package lists..."
+for i in {1..3}; do
+    if sudo apt-get update -y; then
+        echo "Package list updated successfully"
+        break
+    else
+        echo "Attempt $i failed, retrying..."
+        if [ $i -eq 3 ]; then
+            echo "Warning: apt-get update failed after 3 attempts, continuing anyway..."
+            # Try to fix broken packages
+            sudo apt-get install -f -y || true
+        fi
+        sleep 2
+    fi
+done
+
+# Upgrade system (non-critical, allow to fail)
+echo "Upgrading system packages..."
+sudo apt-get upgrade -y || echo "Warning: Some packages could not be upgraded"
 
 # Enable universe and multiverse repositories (may contain additional dependencies)
+echo "Enabling universe and multiverse repositories..."
 sudo add-apt-repository -y universe || true
 sudo add-apt-repository -y multiverse || true
-sudo apt-get update -y
+
+# Update again after adding repositories
+echo "Updating package lists after adding repositories..."
+for i in {1..3}; do
+    if sudo apt-get update -y; then
+        echo "Package list updated successfully after adding repositories"
+        break
+    else
+        echo "Attempt $i failed, retrying..."
+        if [ $i -eq 3 ]; then
+            echo "Warning: apt-get update failed after adding repositories, continuing anyway..."
+        fi
+        sleep 2
+    fi
+done
 
 # Install essential build tools and dependencies first
 sudo apt-get install -y \
@@ -50,8 +88,16 @@ echo \
   $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # Install Docker Engine
-sudo apt-get update -y
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+echo "Updating package lists for Docker installation..."
+sudo apt-get update -y || echo "Warning: apt-get update had issues, continuing..."
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
+    echo "Warning: Docker installation had issues, attempting to fix..."
+    sudo apt-get install -f -y || true
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
+        echo "Error: Docker installation failed"
+        exit 1
+    }
+}
 
 # Start and enable Docker
 sudo systemctl start docker
@@ -172,7 +218,13 @@ echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
   /etc/apt/sources.list.d/jenkins.list > /dev/null
 
 # Update package list
-sudo apt-get update -y
+echo "Updating package lists for Jenkins installation..."
+sudo apt-get update -y || {
+    echo "Warning: apt-get update had issues, attempting to fix..."
+    sudo rm -rf /var/lib/apt/lists/*
+    sudo apt-get clean
+    sudo apt-get update -y || echo "Warning: Could not update package list, continuing..."
+}
 
 # Install common dependencies that Jenkins might need
 sudo apt-get install -y \
