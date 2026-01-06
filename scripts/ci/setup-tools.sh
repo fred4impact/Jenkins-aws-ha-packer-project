@@ -32,3 +32,4 @@ echo "region = ${AWS_REGION}" >> ~/.aws/config
 
 
 
+
