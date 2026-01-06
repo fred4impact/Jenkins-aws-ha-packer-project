@@ -49,21 +49,34 @@ build {
     destination = "/tmp/jenkins-config"
   }
 
+  # Copy jenkinsrole.tar (as shown in images - contains Ansible playbooks and roles)
+  provisioner "file" {
+    source      = "jenkinsrole.tar"
+    destination = "/home/ubuntu/jenkinsrole.tar"
+    only        = ["amazon-ebs.jenkins"]
+  }
+
+  # Copy setup.sh if it exists (as shown in images)
+  provisioner "file" {
+    source      = "scripts/setup.sh"
+    destination = "/home/ubuntu/setup.sh"
+    only        = ["amazon-ebs.jenkins"]
+    on_error    = "continue"  # Continue if setup.sh doesn't exist
+  }
+
   # Install Jenkins and base software
   provisioner "shell" {
     script = "scripts/install-jenkins.sh"
   }
 
-  # Post-installation configuration
-  # Note: jenkinsrole.tar and setup.sh are optional and can be added later if needed
+  # Extract jenkinsrole.tar and run setup.sh with EFS ID (as shown in images)
   provisioner "shell" {
     inline = [
       "cd /home/ubuntu",
-      # Store EFS ID for later use (during instance launch) if provided
-      "if [ -n '${var.efs_id}' ]; then echo 'EFS_ID=${var.efs_id}' | sudo tee /opt/jenkins/efs-id.txt; fi",
-      # If jenkinsrole.tar exists, extract it (can be added via file provisioner if needed)
       "if [ -f jenkinsrole.tar ]; then tar -xvf jenkinsrole.tar; fi",
-      # If setup.sh exists, run it with EFS ID (can be added via file provisioner if needed)
+      # Store EFS ID for later use (during instance launch)
+      "if [ -n '${var.efs_id}' ]; then echo 'EFS_ID=${var.efs_id}' | sudo tee /opt/jenkins/efs-id.txt; fi",
+      # Run setup.sh with EFS ID if it exists
       "if [ -f setup.sh ]; then chmod +x setup.sh && ./setup.sh '${var.efs_id}'; fi"
     ]
   }
