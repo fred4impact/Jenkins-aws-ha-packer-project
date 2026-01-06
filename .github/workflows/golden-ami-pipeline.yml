@@ -146,11 +146,12 @@ jobs:
           JENKINS_VERSION="${JENKINS_VERSION:-2.414.3}"
           JAVA_VERSION="${JAVA_VERSION:-17}"
           
+          # Validate all .pkr.hcl files in the directory (this loads variables.pkr.hcl automatically)
           packer validate \
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "jenkins_version=${JENKINS_VERSION}" \
             -var "java_version=${JAVA_VERSION}" \
-            jenkins-ami.pkr.hcl || exit 1
+            . || exit 1
           echo "✅ Packer configuration is valid"
 
       - name: Build Golden AMI with Packer
@@ -172,11 +173,12 @@ jobs:
           JENKINS_VERSION="${JENKINS_VERSION:-2.414.3}"
           JAVA_VERSION="${JAVA_VERSION:-17}"
           
+          # Build using . to load all .pkr.hcl files (including variables.pkr.hcl)
           packer build \
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "jenkins_version=${JENKINS_VERSION}" \
             -var "java_version=${JAVA_VERSION}" \
-            jenkins-ami.pkr.hcl
+            .
           
           echo "✅ AMI build completed"
 
