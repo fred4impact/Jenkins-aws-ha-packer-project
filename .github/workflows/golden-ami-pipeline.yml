@@ -142,7 +142,15 @@ jobs:
         working-directory: ./packer
         run: |
           echo "=== Validating Packer Configuration ==="
-          packer validate jenkins-ami.pkr.hcl || exit 1
+          # Set default values if not provided via repository variables
+          JENKINS_VERSION="${JENKINS_VERSION:-2.414.3}"
+          JAVA_VERSION="${JAVA_VERSION:-17}"
+          
+          packer validate \
+            -var "aws_region=${{ env.AWS_REGION }}" \
+            -var "jenkins_version=${JENKINS_VERSION}" \
+            -var "java_version=${JAVA_VERSION}" \
+            jenkins-ami.pkr.hcl || exit 1
           echo "✅ Packer configuration is valid"
 
       - name: Build Golden AMI with Packer
@@ -160,10 +168,14 @@ jobs:
           echo "Provisioner: Ansible"
           echo "Components: Jenkins, Java, Ubuntu, playbook"
           
+          # Set default values if not provided via repository variables
+          JENKINS_VERSION="${JENKINS_VERSION:-2.414.3}"
+          JAVA_VERSION="${JAVA_VERSION:-17}"
+          
           packer build \
             -var "aws_region=${{ env.AWS_REGION }}" \
-            -var "jenkins_version=${{ vars.JENKINS_VERSION || '2.414.3' }}" \
-            -var "java_version=${{ vars.JAVA_VERSION || '17' }}" \
+            -var "jenkins_version=${JENKINS_VERSION}" \
+            -var "java_version=${JAVA_VERSION}" \
             jenkins-ami.pkr.hcl
           
           echo "✅ AMI build completed"
