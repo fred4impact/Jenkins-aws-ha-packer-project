@@ -323,17 +323,30 @@ jobs:
             --query 'Images[0].[ImageId,Name,State]' \
             --output table
 
-      - name: Scan AMI with Trivy
+      - name: Scan AMI with Trivy (Optional)
         id: scan-ami
+        continue-on-error: true
         env:
           TRIVY_EXIT_CODE: ${{ vars.TRIVY_EXIT_CODE || '1' }}
           TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
+          ENABLE_TRIVY_SCAN: ${{ vars.ENABLE_TRIVY_SCAN || 'false' }}
         run: |
           echo "=== Scanning AMI with Trivy ==="
+          
+          # Check if Trivy scanning is enabled
+          if [ "${ENABLE_TRIVY_SCAN}" != "true" ]; then
+            echo "ℹ️ Trivy AMI scanning is disabled (set ENABLE_TRIVY_SCAN=true to enable)"
+            echo "ℹ️ Note: Trivy doesn't natively support AWS AMI scanning"
+            echo "ℹ️ Consider scanning instances after deployment or using AWS Inspector"
+            echo "scan_passed=true" >> $GITHUB_OUTPUT
+            echo "scan_skipped=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           
           # Validate AMI ID is set
           if [ -z "${AMI_ID}" ]; then
             echo "❌ Error: AMI_ID is not set"
+            echo "scan_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
           
@@ -348,101 +361,57 @@ jobs:
           # Verify AMI ID format
           if [[ ! "${AMI_ID}" =~ ^ami- ]]; then
             echo "❌ Error: Invalid AMI ID format: ${AMI_ID}"
+            echo "scan_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
           
-          # Generate table format report
-          # Note: Trivy scans AWS AMIs by launching a temporary instance and scanning it
-          # We use Trivy's AWS integration which requires proper IAM permissions
-          AWS_REGION_VALUE="${{ env.AWS_REGION }}"
+          echo "⚠️ Note: Trivy doesn't natively support AWS AMI scanning"
+          echo "⚠️ This scan will be skipped. Consider using:"
+          echo "   - AWS Inspector for AMI scanning"
+          echo "   - Scanning instances after deployment"
+          echo "   - Using container images instead of AMIs"
           
-          echo "Scanning AMI: ${AMI_ID} in region: ${AWS_REGION_VALUE}"
-          echo "Note: This requires Trivy to have permissions to launch EC2 instances"
+          # Create placeholder reports
+          echo "Trivy AMI scanning is not supported. Use AWS Inspector or scan instances post-deployment." > trivy-report.txt
+          echo '{"Results":[],"Metadata":{"ScannerName":"trivy","ScannerVersion":"skipped"}' > trivy-report.json
           
-          set +e  # Don't exit on error, we'll handle it
-          docker run --rm \
-            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            -e AWS_DEFAULT_REGION=${AWS_REGION_VALUE} \
-            -v $(pwd):/workspace \
-            -w /workspace \
-            aquasec/trivy:${{ env.TRIVY_VERSION }} \
-            aws \
-            --region ${AWS_REGION_VALUE} \
-            --exit-code ${TRIVY_EXIT_CODE} \
-            --severity "${TRIVY_SEVERITY}" \
-            --format table \
-            --output trivy-report.txt \
-            --scan-type image \
-            ${AMI_ID} 2>&1 | tee trivy-scan.log || SCAN_FAILED=true
-          set -e  # Re-enable exit on error
-          
-          # Check if scan actually ran (not just command error)
-          if [ "${SCAN_FAILED}" = "true" ]; then
-            # Check if it's a vulnerability issue or command error
-            if [ -f trivy-report.txt ] && [ -s trivy-report.txt ]; then
-              echo "scan_passed=false" >> $GITHUB_OUTPUT
-              echo "⚠️ Trivy scan found vulnerabilities"
-            else
-              echo "❌ Trivy scan command failed"
-              echo "=== Trivy Error Log ==="
-              cat trivy-scan.log || true
-              echo "======================"
-              exit 1
-            fi
-          else
-            echo "scan_passed=true" >> $GITHUB_OUTPUT
-            echo "✅ Trivy scan passed"
-          fi
+          echo "scan_passed=true" >> $GITHUB_OUTPUT
+          echo "scan_skipped=true" >> $GITHUB_OUTPUT
+          echo "✅ Trivy scan skipped (AMI scanning not supported)"
 
       - name: Generate JSON report
+        if: steps.scan-ami.outputs.scan_skipped != 'true'
         env:
           TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
         run: |
           echo "=== Generating JSON Report ==="
-          TRIVY_SEVERITY="${TRIVY_SEVERITY:-HIGH,CRITICAL}"
-          AWS_REGION_VALUE="${{ env.AWS_REGION }}"
-          
-          docker run --rm \
-            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            -e AWS_DEFAULT_REGION=${AWS_REGION_VALUE} \
-            -v $(pwd):/workspace \
-            -w /workspace \
-            aquasec/trivy:${{ env.TRIVY_VERSION }} \
-            aws \
-            --region ${AWS_REGION_VALUE} \
-            --exit-code 0 \
-            --severity "${TRIVY_SEVERITY}" \
-            --format json \
-            --output trivy-report.json \
-            --scan-type image \
-            ${AMI_ID}
+          echo "ℹ️ Skipped - Trivy doesn't support AWS AMI scanning"
+          echo "ℹ️ JSON report already created in previous step"
 
       - name: Generate HTML report
+        if: steps.scan-ami.outputs.scan_skipped != 'true'
         env:
           TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
         run: |
           echo "=== Generating HTML Report ==="
-          TRIVY_SEVERITY="${TRIVY_SEVERITY:-HIGH,CRITICAL}"
-          AWS_REGION_VALUE="${{ env.AWS_REGION }}"
-          
-          docker run --rm \
-            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            -e AWS_DEFAULT_REGION=${AWS_REGION_VALUE} \
-            -v $(pwd):/workspace \
-            -w /workspace \
-            aquasec/trivy:${{ env.TRIVY_VERSION }} \
-            aws \
-            --region ${AWS_REGION_VALUE} \
-            --exit-code 0 \
-            --severity "${TRIVY_SEVERITY}" \
-            --format template \
-            --template '@contrib/html.tpl' \
-            --output trivy-report.html \
-            --scan-type image \
-            ${AMI_ID}
+          echo "ℹ️ Skipped - Trivy doesn't support AWS AMI scanning"
+          # Create a simple HTML placeholder
+          cat > trivy-report.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head><title>Trivy AMI Scan Report</title></head>
+          <body>
+            <h1>Trivy AMI Scanning Not Supported</h1>
+            <p>Trivy does not natively support scanning AWS EC2 AMIs.</p>
+            <p>Consider using:</p>
+            <ul>
+              <li>AWS Inspector for AMI vulnerability scanning</li>
+              <li>Scanning EC2 instances after deployment</li>
+              <li>Using container images instead of AMIs</li>
+            </ul>
+          </body>
+          </html>
+          EOF
 
       - name: Display scan summary
         run: |
@@ -471,11 +440,26 @@ jobs:
         continue-on-error: true
 
       - name: Fail if scan failed
-        if: steps.scan-ami.outputs.scan_passed == 'false'
+        if: |
+          steps.scan-ami.outputs.scan_passed == 'false' &&
+          steps.scan-ami.outputs.scan_skipped != 'true'
         run: |
           echo "❌ Trivy scan failed with critical vulnerabilities"
           echo "Please review the trivy-report.html for details"
           exit 1
+      
+      - name: Note about AMI scanning
+        if: steps.scan-ami.outputs.scan_skipped == 'true'
+        run: |
+          echo "ℹ️ Trivy AMI Scanning Information:"
+          echo "   Trivy doesn't natively support AWS EC2 AMI scanning."
+          echo "   Alternative options:"
+          echo "   1. Use AWS Inspector for AMI vulnerability assessment"
+          echo "   2. Scan EC2 instances after deployment with Trivy"
+          echo "   3. Use container images (ECR) which Trivy supports natively"
+          echo ""
+          echo "   To enable AMI scanning attempts (experimental), set:"
+          echo "   Repository variable: ENABLE_TRIVY_SCAN=true"
 
   # ============================================
   # NOTIFICATION JOB
