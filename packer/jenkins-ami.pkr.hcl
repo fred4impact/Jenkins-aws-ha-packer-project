@@ -12,11 +12,20 @@ packer {
 }
 
 locals {
+  # Format: YYYYMMDD
+  build_date = formatdate("YYYYMMDD", timestamp())
+  # Format: HHMMSS
+  build_time = formatdate("HHMMSS", timestamp())
+  # Full timestamp for unique naming
   timestamp = regex_replace(timestamp(), "[- TZ:]", "")
+  # AMI name format: Jenkins-bilarn-HA-AMI-YYYYMMDD-BUILD-NUMBER
+  ami_name_base = "Jenkins-bilarn-HA-AMI-${local.build_date}"
+  # If build_number is provided, use it; otherwise use timestamp
+  ami_name = var.build_number != "" ? "${local.ami_name_base}-${var.build_number}" : "${local.ami_name_base}-${local.timestamp}"
 }
 
 source "amazon-ebs" "jenkins" {
-  ami_name      = "jenkins-ha-${local.timestamp}"
+  ami_name      = local.ami_name
   instance_type = "t3.medium"
   region        = var.aws_region
   source_ami_filter {
@@ -30,10 +39,13 @@ source "amazon-ebs" "jenkins" {
   }
   ssh_username = "ubuntu"
   tags = {
-    Name        = "Jenkins HA AMI"
+    Name        = local.ami_name
     Environment = "Production"
     ManagedBy   = "Packer"
     Application = "Jenkins"
+    BuildDate   = local.build_date
+    BuildTime   = local.build_time
+    BuildNumber = var.build_number != "" ? var.build_number : local.timestamp
   }
 }
 

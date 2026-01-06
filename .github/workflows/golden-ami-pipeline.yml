@@ -41,6 +41,8 @@ jobs:
     outputs:
       timestamp: ${{ steps.set-timestamp.outputs.timestamp }}
       build_id: ${{ steps.set-timestamp.outputs.build_id }}
+      build_date: ${{ steps.set-timestamp.outputs.build_date }}
+      build_number: ${{ steps.set-timestamp.outputs.build_number }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -51,10 +53,24 @@ jobs:
       - name: Set build metadata
         id: set-timestamp
         run: |
+          # Get build date (YYYYMMDD format)
+          BUILD_DATE=$(date +%Y%m%d)
+          
+          # Generate build number (incremental based on date + run number)
+          # Format: RUN-{run_id} or use run number for incremental
+          BUILD_NUMBER="RUN-${{ github.run_number }}"
+          
+          # Full timestamp for unique IDs
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           BUILD_ID="build-${TIMESTAMP}"
+          
           echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
           echo "build_id=${BUILD_ID}" >> $GITHUB_OUTPUT
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "build_number=${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          
+          echo "✅ Build Date: ${BUILD_DATE}"
+          echo "✅ Build Number: ${BUILD_NUMBER}"
           echo "✅ Build ID: ${BUILD_ID}"
 
       - name: Verify playbook structure
@@ -127,12 +143,14 @@ jobs:
           # Set default values if not provided via repository variables
           JENKINS_VERSION="${JENKINS_VERSION:-2.414.3}"
           JAVA_VERSION="${JAVA_VERSION:-17}"
+          BUILD_NUMBER="${{ needs.checkout.outputs.build_number }}"
           
           # Validate all .pkr.hcl files in the directory (this loads variables.pkr.hcl automatically)
           packer validate \
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "jenkins_version=${JENKINS_VERSION}" \
             -var "java_version=${JAVA_VERSION}" \
+            -var "build_number=${BUILD_NUMBER}" \
             . || exit 1
           echo "✅ Packer configuration is valid"
 
@@ -150,19 +168,25 @@ jobs:
           echo "Base AMI: Ubuntu 22.04"
           echo "Provisioner: Ansible"
           echo "Components: Jenkins, Java, Ubuntu, playbook"
+          echo "Build Date: ${{ needs.checkout.outputs.build_date }}"
+          echo "Build Number: ${{ needs.checkout.outputs.build_number }}"
           
           # Set default values if not provided via repository variables
           JENKINS_VERSION="${JENKINS_VERSION:-2.414.3}"
           JAVA_VERSION="${JAVA_VERSION:-17}"
+          BUILD_NUMBER="${{ needs.checkout.outputs.build_number }}"
           
           # Build using . to load all .pkr.hcl files (including variables.pkr.hcl)
+          # AMI name will be: Jenkins-bilarn-HA-AMI-YYYYMMDD-RUN-{number}
           packer build \
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "jenkins_version=${JENKINS_VERSION}" \
             -var "java_version=${JAVA_VERSION}" \
+            -var "build_number=${BUILD_NUMBER}" \
             .
           
           echo "✅ AMI build completed"
+          echo "✅ AMI Name Format: Jenkins-bilarn-HA-AMI-${{ needs.checkout.outputs.build_date }}-${BUILD_NUMBER}"
 
       - name: Extract AMI ID from manifest
         id: extract-ami-id
