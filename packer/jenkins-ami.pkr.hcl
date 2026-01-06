@@ -49,20 +49,8 @@ build {
     destination = "/tmp/jenkins-config"
   }
 
-  # Copy jenkinsrole.tar (as shown in images - contains Ansible playbooks and roles)
-  provisioner "file" {
-    source      = "jenkinsrole.tar"
-    destination = "/home/ubuntu/jenkinsrole.tar"
-    only        = ["amazon-ebs.jenkins"]
-  }
-
-  # Copy setup.sh if it exists (as shown in images)
-  provisioner "file" {
-    source      = "scripts/setup.sh"
-    destination = "/home/ubuntu/setup.sh"
-    only        = ["amazon-ebs.jenkins"]
-    on_error    = "continue"  # Continue if setup.sh doesn't exist
-  }
+  # Note: jenkinsrole.tar and setup.sh are optional files
+  # They will be handled in shell provisioner if they exist in the build environment
 
   # Install Jenkins and base software
   provisioner "shell" {
