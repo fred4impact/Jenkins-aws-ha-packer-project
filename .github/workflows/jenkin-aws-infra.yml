@@ -40,7 +40,7 @@ on:
       - main
       - master
     paths:
-      - '.github/workflows/deploy-infra.yml'
+      - '.github/workflows/jenkin-aws-infra.yml'
       - 'terraform/**'
   pull_request:
     branches:
@@ -164,13 +164,13 @@ jobs:
         run: |
           TFVARS_FILE="${ENV}.tfvars"
           
-          # Check if tfvars file exists
+          # Check if tfvars file exists (from repo root)
           if [ -f "terraform/main/${TFVARS_FILE}" ]; then
             echo "✅ Using environment-specific tfvars file: ${TFVARS_FILE}"
             echo "tfvars_file=${TFVARS_FILE}" >> $GITHUB_OUTPUT
             echo "use_tfvars=true" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ No ${TFVARS_FILE} found, using variables from workflow inputs"
+            echo "⚠️ No ${TFVARS_FILE} found, using variables from workflow inputs and secrets"
             echo "tfvars_file=" >> $GITHUB_OUTPUT
             echo "use_tfvars=false" >> $GITHUB_OUTPUT
           fi
@@ -194,11 +194,20 @@ jobs:
           TF_VAR_jenkins_ami_id: ${{ steps.resolve-ami-deploy.outputs.ami_id }}
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Creating Terraform Plan (Deploy) ==="
           echo "AMI ID: ${{ steps.resolve-ami-deploy.outputs.ami_id }}"
           echo "Environment: ${{ github.event.inputs.environment || 'dev' }}"
           echo "AWS Region: ${{ github.event.inputs.aws_region || 'us-east-1' }}"
+          
+          # Verify required secrets are set
+          if [ -z "${TF_VAR_jenkins_admin_pass}" ]; then
+            echo "❌ Error: JENKINS_ADMIN_PASS secret is required but not set"
+            echo "Please add JENKINS_ADMIN_PASS to your GitHub repository secrets"
+            exit 1
+          fi
           
           # Build terraform plan command
           PLAN_CMD="terraform plan"
@@ -213,6 +222,8 @@ jobs:
           PLAN_CMD="${PLAN_CMD} -var=\"jenkins_ami_id=${{ steps.resolve-ami-deploy.outputs.ami_id }}\""
           PLAN_CMD="${PLAN_CMD} -var=\"aws_region=${{ github.event.inputs.aws_region || 'us-east-1' }}\""
           PLAN_CMD="${PLAN_CMD} -var=\"environment=${{ github.event.inputs.environment || 'dev' }}\""
+          PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_user=${TF_VAR_jenkins_admin_user}\""
+          PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_pass=${TF_VAR_jenkins_admin_pass}\""
           PLAN_CMD="${PLAN_CMD} -out=tfplan"
           
           eval ${PLAN_CMD}
@@ -224,6 +235,8 @@ jobs:
         env:
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Creating Terraform Plan (Destroy) ==="
           echo "⚠️ WARNING: This will destroy all infrastructure in environment: ${{ github.event.inputs.environment || 'dev' }}"
@@ -236,11 +249,21 @@ jobs:
           if [ "${{ steps.tfvars-file.outputs.use_tfvars }}" == "true" ]; then
             PLAN_CMD="${PLAN_CMD} -var-file=${{ steps.tfvars-file.outputs.tfvars_file }}"
             echo "Using tfvars file: ${{ steps.tfvars-file.outputs.tfvars_file }}"
+          else
+            # If no tfvars file, ensure required variables are provided
+            if [ -z "${TF_VAR_jenkins_admin_pass}" ]; then
+              echo "⚠️ Warning: JENKINS_ADMIN_PASS secret not set, but tfvars file not found"
+              echo "Terraform may prompt for jenkins_admin_pass if not in state"
+            fi
           fi
           
-          # Add required variables
+          # Add required variables (tfvars will be used if available)
           PLAN_CMD="${PLAN_CMD} -var=\"aws_region=${{ github.event.inputs.aws_region || 'us-east-1' }}\""
           PLAN_CMD="${PLAN_CMD} -var=\"environment=${{ github.event.inputs.environment || 'dev' }}\""
+          if [ -n "${TF_VAR_jenkins_admin_pass}" ]; then
+            PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_user=${TF_VAR_jenkins_admin_user}\""
+            PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_pass=${TF_VAR_jenkins_admin_pass}\""
+          fi
           PLAN_CMD="${PLAN_CMD} -out=tfplan"
           
           eval ${PLAN_CMD}
@@ -253,6 +276,8 @@ jobs:
           TF_VAR_jenkins_ami_id: ${{ steps.resolve-ami-deploy.outputs.ami_id }}
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Deploying Infrastructure ==="
           echo "Creating:"
@@ -271,6 +296,8 @@ jobs:
         env:
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Destroying Infrastructure ==="
           echo "⚠️ WARNING: Destroying all infrastructure in environment: ${{ github.event.inputs.environment || 'dev' }}"
@@ -289,6 +316,12 @@ jobs:
           if [ "${{ steps.tfvars-file.outputs.use_tfvars }}" == "true" ]; then
             DESTROY_CMD="${DESTROY_CMD} -var-file=${{ steps.tfvars-file.outputs.tfvars_file }}"
             echo "Using tfvars file: ${{ steps.tfvars-file.outputs.tfvars_file }}"
+          else
+            # If no tfvars file, ensure required variables are provided
+            if [ -n "${TF_VAR_jenkins_admin_pass}" ]; then
+              DESTROY_CMD="${DESTROY_CMD} -var=\"jenkins_admin_user=${TF_VAR_jenkins_admin_user}\""
+              DESTROY_CMD="${DESTROY_CMD} -var=\"jenkins_admin_pass=${TF_VAR_jenkins_admin_pass}\""
+            fi
           fi
           
           # Add required variables
