@@ -34,6 +34,20 @@ on:
           - 'us-east-1'
           - 'us-west-2'
           - 'eu-west-1'
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/deploy-infra.yml'
+      - 'terraform/**'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/deploy-infra.yml'
+      - 'terraform/**'
     
 
 env:
@@ -46,6 +60,7 @@ jobs:
   deploy_infrastructure:
     name: Stage IV - Deploy/Destroy Infrastructure with Terraform
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
     outputs:
