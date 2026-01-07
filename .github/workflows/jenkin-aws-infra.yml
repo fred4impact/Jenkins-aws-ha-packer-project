@@ -1,4 +1,5 @@
-name: Deploy Infrastructure Pipeline
+name: Jenkins AWS Infrastructure Lifecycle (Deploy | Destroy)
+
 
 on:
   workflow_dispatch:
@@ -39,14 +40,14 @@ on:
       - main
       - master
     paths:
-      - '.github/workflows/deploy-infra.yml'
+      - '.github/workflows/jenkin-aws-infra.yml'
       - 'terraform/**'
   pull_request:
     branches:
       - main
       - master
     paths:
-      - '.github/workflows/deploy-infra.yml'
+      - '.github/workflows/jenkin-aws-infra.yml'
       - 'terraform/**'
     
 
@@ -64,9 +65,9 @@ jobs:
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
     outputs:
-      alb_dns: ${{ steps.terraform-output.outputs.alb_dns }}
-      efs_id: ${{ steps.terraform-output.outputs.efs_id }}
-      ami_id: ${{ steps.resolve-ami.outputs.ami_id }}
+      alb_dns: ${{ steps.terraform-output-deploy.outputs.alb_dns || steps.terraform-output-destroy.outputs.alb_dns }}
+      efs_id: ${{ steps.terraform-output-deploy.outputs.efs_id || steps.terraform-output-destroy.outputs.efs_id }}
+      ami_id: ${{ steps.resolve-ami-deploy.outputs.ami_id || steps.resolve-ami-destroy.outputs.ami_id }}
       action: ${{ github.event.inputs.action }}
     steps:
       - name: Checkout repository
@@ -74,16 +75,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+
       - name: Resolve AMI ID (for deploy only)
-        id: resolve-ami
+        id: resolve-ami-deploy
         if: github.event.inputs.action == 'deploy'
         env:
           AMI_INPUT: ${{ github.event.inputs.ami_id }}
           AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
         run: |
           echo "=== Resolving AMI ID ==="
-          AMI_INPUT="${{ github.event.inputs.ami_id }}"
-          AWS_REGION="${{ github.event.inputs.aws_region || 'us-east-1' }}"
           
           if [ -z "${AMI_INPUT}" ]; then
             echo "❌ Error: AMI ID is required for deployment"
@@ -97,11 +103,6 @@ jobs:
           else
             # Assume it's an AMI name, search for it
             echo "🔍 Searching for AMI by name: ${AMI_INPUT}"
-            
-            # Configure AWS credentials for AMI lookup
-            aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
-            aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            aws configure set region ${AWS_REGION}
             
             # Search for AMI by name
             AMI_ID=$(aws ec2 describe-images \
@@ -145,18 +146,11 @@ jobs:
             --output table
       
       - name: Set AMI ID for destroy (not required)
-        id: resolve-ami
+        id: resolve-ami-destroy
         if: github.event.inputs.action == 'destroy'
         run: |
           echo "ami_id=" >> $GITHUB_OUTPUT
           echo "⚠️ Destroy action - AMI ID not required"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -165,17 +159,18 @@ jobs:
 
       - name: Determine tfvars file
         id: tfvars-file
+        env:
+          ENV: ${{ github.event.inputs.environment || 'dev' }}
         run: |
-          ENV="${{ github.event.inputs.environment || 'dev' }}"
           TFVARS_FILE="${ENV}.tfvars"
           
-          # Check if tfvars file exists
+          # Check if tfvars file exists (from repo root)
           if [ -f "terraform/main/${TFVARS_FILE}" ]; then
             echo "✅ Using environment-specific tfvars file: ${TFVARS_FILE}"
             echo "tfvars_file=${TFVARS_FILE}" >> $GITHUB_OUTPUT
             echo "use_tfvars=true" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ No ${TFVARS_FILE} found, using variables from workflow inputs"
+            echo "⚠️ No ${TFVARS_FILE} found, using variables from workflow inputs and secrets"
             echo "tfvars_file=" >> $GITHUB_OUTPUT
             echo "use_tfvars=false" >> $GITHUB_OUTPUT
           fi
@@ -196,14 +191,23 @@ jobs:
         if: github.event.inputs.action == 'deploy'
         working-directory: ./terraform/main
         env:
-          TF_VAR_jenkins_ami_id: ${{ steps.resolve-ami.outputs.ami_id }}
+          TF_VAR_jenkins_ami_id: ${{ steps.resolve-ami-deploy.outputs.ami_id }}
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Creating Terraform Plan (Deploy) ==="
-          echo "AMI ID: ${{ steps.resolve-ami.outputs.ami_id }}"
+          echo "AMI ID: ${{ steps.resolve-ami-deploy.outputs.ami_id }}"
           echo "Environment: ${{ github.event.inputs.environment || 'dev' }}"
           echo "AWS Region: ${{ github.event.inputs.aws_region || 'us-east-1' }}"
+          
+          # Verify required secrets are set
+          if [ -z "${TF_VAR_jenkins_admin_pass}" ]; then
+            echo "❌ Error: JENKINS_ADMIN_PASS secret is required but not set"
+            echo "Please add JENKINS_ADMIN_PASS to your GitHub repository secrets"
+            exit 1
+          fi
           
           # Build terraform plan command
           PLAN_CMD="terraform plan"
@@ -215,9 +219,11 @@ jobs:
           fi
           
           # Add required variables (will override tfvars if specified)
-          PLAN_CMD="${PLAN_CMD} -var=\"jenkins_ami_id=${{ steps.resolve-ami.outputs.ami_id }}\""
+          PLAN_CMD="${PLAN_CMD} -var=\"jenkins_ami_id=${{ steps.resolve-ami-deploy.outputs.ami_id }}\""
           PLAN_CMD="${PLAN_CMD} -var=\"aws_region=${{ github.event.inputs.aws_region || 'us-east-1' }}\""
           PLAN_CMD="${PLAN_CMD} -var=\"environment=${{ github.event.inputs.environment || 'dev' }}\""
+          PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_user=${TF_VAR_jenkins_admin_user}\""
+          PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_pass=${TF_VAR_jenkins_admin_pass}\""
           PLAN_CMD="${PLAN_CMD} -out=tfplan"
           
           eval ${PLAN_CMD}
@@ -229,6 +235,8 @@ jobs:
         env:
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Creating Terraform Plan (Destroy) ==="
           echo "⚠️ WARNING: This will destroy all infrastructure in environment: ${{ github.event.inputs.environment || 'dev' }}"
@@ -241,11 +249,21 @@ jobs:
           if [ "${{ steps.tfvars-file.outputs.use_tfvars }}" == "true" ]; then
             PLAN_CMD="${PLAN_CMD} -var-file=${{ steps.tfvars-file.outputs.tfvars_file }}"
             echo "Using tfvars file: ${{ steps.tfvars-file.outputs.tfvars_file }}"
+          else
+            # If no tfvars file, ensure required variables are provided
+            if [ -z "${TF_VAR_jenkins_admin_pass}" ]; then
+              echo "⚠️ Warning: JENKINS_ADMIN_PASS secret not set, but tfvars file not found"
+              echo "Terraform may prompt for jenkins_admin_pass if not in state"
+            fi
           fi
           
-          # Add required variables
+          # Add required variables (tfvars will be used if available)
           PLAN_CMD="${PLAN_CMD} -var=\"aws_region=${{ github.event.inputs.aws_region || 'us-east-1' }}\""
           PLAN_CMD="${PLAN_CMD} -var=\"environment=${{ github.event.inputs.environment || 'dev' }}\""
+          if [ -n "${TF_VAR_jenkins_admin_pass}" ]; then
+            PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_user=${TF_VAR_jenkins_admin_user}\""
+            PLAN_CMD="${PLAN_CMD} -var=\"jenkins_admin_pass=${TF_VAR_jenkins_admin_pass}\""
+          fi
           PLAN_CMD="${PLAN_CMD} -out=tfplan"
           
           eval ${PLAN_CMD}
@@ -255,9 +273,11 @@ jobs:
         if: github.event.inputs.action == 'deploy'
         working-directory: ./terraform/main
         env:
-          TF_VAR_jenkins_ami_id: ${{ steps.resolve-ami.outputs.ami_id }}
+          TF_VAR_jenkins_ami_id: ${{ steps.resolve-ami-deploy.outputs.ami_id }}
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Deploying Infrastructure ==="
           echo "Creating:"
@@ -265,7 +285,7 @@ jobs:
           echo "  - EFS File System"
           echo "  - Application Load Balancer"
           echo "  - Auto Scaling Group"
-          echo "  - Launch Template (using Golden AMI: ${{ steps.resolve-ami.outputs.ami_id }})"
+          echo "  - Launch Template (using Golden AMI: ${{ steps.resolve-ami-deploy.outputs.ami_id }})"
           
           terraform apply -auto-approve tfplan
           echo "✅ Infrastructure deployed successfully"
@@ -276,6 +296,8 @@ jobs:
         env:
           TF_VAR_aws_region: ${{ github.event.inputs.aws_region || 'us-east-1' }}
           TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_jenkins_admin_user: ${{ secrets.JENKINS_ADMIN_USER || 'admin' }}
+          TF_VAR_jenkins_admin_pass: ${{ secrets.JENKINS_ADMIN_PASS }}
         run: |
           echo "=== Destroying Infrastructure ==="
           echo "⚠️ WARNING: Destroying all infrastructure in environment: ${{ github.event.inputs.environment || 'dev' }}"
@@ -294,6 +316,12 @@ jobs:
           if [ "${{ steps.tfvars-file.outputs.use_tfvars }}" == "true" ]; then
             DESTROY_CMD="${DESTROY_CMD} -var-file=${{ steps.tfvars-file.outputs.tfvars_file }}"
             echo "Using tfvars file: ${{ steps.tfvars-file.outputs.tfvars_file }}"
+          else
+            # If no tfvars file, ensure required variables are provided
+            if [ -n "${TF_VAR_jenkins_admin_pass}" ]; then
+              DESTROY_CMD="${DESTROY_CMD} -var=\"jenkins_admin_user=${TF_VAR_jenkins_admin_user}\""
+              DESTROY_CMD="${DESTROY_CMD} -var=\"jenkins_admin_pass=${TF_VAR_jenkins_admin_pass}\""
+            fi
           fi
           
           # Add required variables
@@ -304,7 +332,7 @@ jobs:
           echo "✅ Infrastructure destroyed successfully"
 
       - name: Get Terraform outputs (Deploy only)
-        id: terraform-output
+        id: terraform-output-deploy
         if: github.event.inputs.action == 'deploy'
         working-directory: ./terraform/main
         run: |
@@ -317,7 +345,7 @@ jobs:
           echo "✅ EFS ID: ${EFS_ID}"
       
       - name: Set empty outputs (Destroy)
-        id: terraform-output
+        id: terraform-output-destroy
         if: github.event.inputs.action == 'destroy'
         run: |
           echo "alb_dns=" >> $GITHUB_OUTPUT
